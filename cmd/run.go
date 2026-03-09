@@ -417,7 +417,8 @@ func loadConfig() (*config.Config, error) {
 
 // runTestsCloud uploads tests to a remote API server and streams results.
 func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time) error {
-	client := cloud.NewClient(apiURL)
+	token := os.Getenv("SPARK_TOKEN")
+	client := cloud.NewClient(apiURL, token)
 
 	// Health check
 	if err := client.HealthCheck(); err != nil {

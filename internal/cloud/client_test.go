@@ -19,7 +19,7 @@ func TestClient_HealthCheck_OK(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	if err := client.HealthCheck(); err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -32,7 +32,7 @@ func TestClient_HealthCheck_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	err := client.HealthCheck()
 	if err == nil {
 		t.Errorf("expected error for 500 status")
@@ -40,7 +40,7 @@ func TestClient_HealthCheck_ServerError(t *testing.T) {
 }
 
 func TestClient_HealthCheck_Unreachable(t *testing.T) {
-	client := NewClient("http://localhost:0")
+	client := NewClient("http://localhost:0", "")
 	err := client.HealthCheck()
 	if err == nil {
 		t.Errorf("expected error for unreachable server")
@@ -73,7 +73,7 @@ func TestClient_CreateRun_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	resp, err := client.CreateRun(&CreateRunRequest{
 		Suites: []SuiteSubmission{
 			{Name: "suite1", Tests: []model.Test{{Name: "t1"}}},
@@ -94,7 +94,7 @@ func TestClient_CreateRun_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	_, err := client.CreateRun(&CreateRunRequest{})
 	if err == nil {
 		t.Errorf("expected error for 400 status")
@@ -113,14 +113,14 @@ func TestClient_StopRun_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	if err := client.StopRun("run-123"); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
 
 func TestClient_StopRun_Unreachable(t *testing.T) {
-	client := NewClient("http://localhost:0")
+	client := NewClient("http://localhost:0", "")
 	err := client.StopRun("run-123")
 	if err == nil {
 		t.Errorf("expected error for unreachable server")
@@ -218,5 +218,66 @@ func TestClient_BuildSubmission_Empty(t *testing.T) {
 	}
 	if len(req.Suites) != 0 {
 		t.Errorf("expected 0 suites, got %d", len(req.Suites))
+	}
+}
+
+// --- Token authentication ---
+
+func TestClient_CreateRun_WithToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer my-secret" {
+			t.Errorf("expected 'Bearer my-secret', got %q", auth)
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(CreateRunResponse{ID: "run-456"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "my-secret")
+	resp, err := client.CreateRun(&CreateRunRequest{
+		Suites: []SuiteSubmission{
+			{Name: "suite1", Tests: []model.Test{{Name: "t1"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.ID != "run-456" {
+		t.Errorf("expected run-456, got %q", resp.ID)
+	}
+}
+
+func TestClient_HealthCheck_WithToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer my-secret" {
+			t.Errorf("expected 'Bearer my-secret', got %q", auth)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "my-secret")
+	if err := client.HealthCheck(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_CreateRun_WithoutToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "" {
+			t.Errorf("expected no Authorization header, got %q", auth)
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(CreateRunResponse{ID: "run-789"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "")
+	_, err := client.CreateRun(&CreateRunRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -294,7 +294,7 @@ func TestStream_StreamRun_FullLifecycle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	var buf bytes.Buffer
 	result, err := client.StreamRun(context.Background(), "run-123", &buf)
 	if err != nil {
@@ -338,7 +338,7 @@ func TestStream_StreamRun_ContextCancel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Cancel immediately
@@ -358,7 +358,7 @@ func TestStream_StreamRun_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "")
 	var buf bytes.Buffer
 	_, err := client.StreamRun(context.Background(), "run-123", &buf)
 	if err == nil {

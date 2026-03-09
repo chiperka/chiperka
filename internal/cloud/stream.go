@@ -69,6 +69,7 @@ func (c *Client) StreamRun(ctx context.Context, runID string, out io.Writer) (*R
 		return nil, fmt.Errorf("failed to create SSE request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.setAuth(req)
 
 	// Use a client without timeout for streaming
 	streamClient := &http.Client{}

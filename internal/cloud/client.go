@@ -15,22 +15,37 @@ import (
 // Client is the Spark Cloud API client.
 type Client struct {
 	baseURL    string
+	token      string
 	httpClient *http.Client
 }
 
 // NewClient creates a new cloud API client.
-func NewClient(baseURL string) *Client {
+func NewClient(baseURL, token string) *Client {
 	return &Client{
 		baseURL: baseURL,
+		token:   token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
+// setAuth sets the Authorization header if a token is configured.
+func (c *Client) setAuth(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+}
+
 // HealthCheck verifies the API server is reachable.
 func (c *Client) HealthCheck() error {
-	resp, err := c.httpClient.Get(c.baseURL + "/health")
+	req, err := http.NewRequest("GET", c.baseURL+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create health check request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("cannot reach API server: %w", err)
 	}
@@ -76,7 +91,14 @@ func (c *Client) CreateRun(req *CreateRunRequest) (*CreateRunResponse, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(c.baseURL+"/api/runs", "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/runs", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create run: %w", err)
 	}
@@ -99,7 +121,13 @@ func (c *Client) CreateRun(req *CreateRunRequest) (*CreateRunResponse, error) {
 
 // StopRun requests the API to cancel a running run.
 func (c *Client) StopRun(runID string) error {
-	resp, err := c.httpClient.Post(c.baseURL+"/api/runs/"+runID+"/stop", "application/json", nil)
+	req, err := http.NewRequest("POST", c.baseURL+"/api/runs/"+runID+"/stop", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create stop request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to stop run: %w", err)
 	}

@@ -240,7 +240,7 @@ func runTests(cmd *cobra.Command, args []string) error {
 	// Warn about flags that have no effect in cloud mode
 	if cloudMode {
 		ignoredInCloud := []string{
-			"artifacts", "regenerate-snapshots",
+			"regenerate-snapshots",
 			"timeout", "workers",
 		}
 		for _, flag := range ignoredInCloud {
@@ -256,7 +256,12 @@ func runTests(cmd *cobra.Command, args []string) error {
 		if cloudURL == "" {
 			cloudURL = "https://spark-cloud.finie.io"
 		}
-		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter)
+		// Only download artifacts if --artifacts was explicitly set
+		cloudArtifactsDir := ""
+		if cmd.Flags().Changed("artifacts") {
+			cloudArtifactsDir = artifactsDir
+		}
+		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter, cloudArtifactsDir)
 		telemetry.Wait(4 * time.Second)
 		return err // runTestsCloud already wraps with ExitError
 	}
@@ -458,7 +463,7 @@ func resolveCloudToken(apiURL string) string {
 }
 
 // runTestsCloud uploads tests to a remote API server and streams results.
-func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter) error {
+func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter, artifactsDir string) error {
 	token := resolveCloudToken(apiURL)
 	client := cloud.NewClient(apiURL, token)
 
@@ -554,6 +559,21 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		}
 	}
 
+	// Download artifacts if requested
+	if artifactsDir != "" {
+		if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create artifacts directory: %v\n", err)
+		} else if err := client.DownloadArtifactsZip(resp.ID, artifactsDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to download artifacts: %v\n", err)
+		} else {
+			emitter.Info(events.Fields{
+				"action": "artifacts_download",
+				"target": artifactsDir,
+				"msg":    fmt.Sprintf("Artifacts downloaded to %s", artifactsDir),
+			})
+		}
+	}
+
 	// Record telemetry
 	total := result.Passed + result.Failed + result.Skipped
 	telemetry.RecordRun(telemetry.RunParams{
@@ -562,6 +582,7 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		CloudMode:      true,
 		HasHTMLReport:  htmlOutput != "",
 		HasJUnitReport: junitOutput != "",
+		HasArtifacts:   artifactsDir != "",
 		HasTagsFilter:  len(filterTags) > 0,
 		HasNameFilter:  filterName != "",
 	}, total, result.Passed, result.Failed, result.Skipped, len(tests.Suites))

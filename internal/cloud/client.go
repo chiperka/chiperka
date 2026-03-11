@@ -252,6 +252,77 @@ func (c *Client) DownloadHTMLReportZip(runID, outputDir string) error {
 	return nil
 }
 
+// DownloadArtifactsZip downloads the artifacts ZIP for a run and extracts it to outputDir.
+// Returns nil if the server returns 404 (no artifacts is not an error).
+func (c *Client) DownloadArtifactsZip(runID, outputDir string) error {
+	endpoint := fmt.Sprintf("/api/runs/%s/artifacts.zip", runID)
+
+	req, err := http.NewRequest("GET", c.baseURL+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create artifacts request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download artifacts: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 404 means no artifacts — not an error
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read entire ZIP into memory
+	zipData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read artifacts zip: %w", err)
+	}
+
+	// Open ZIP archive
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return fmt.Errorf("failed to open artifacts zip: %w", err)
+	}
+
+	// Extract all files
+	for _, f := range zr.File {
+		target := filepath.Join(outputDir, f.Name)
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("failed to create directory for %s: %w", f.Name, err)
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open zip entry %s: %w", f.Name, err)
+		}
+
+		outFile, err := os.Create(target)
+		if err != nil {
+			rc.Close()
+			return fmt.Errorf("failed to create file %s: %w", target, err)
+		}
+
+		if _, err := io.Copy(outFile, rc); err != nil {
+			outFile.Close()
+			rc.Close()
+			return fmt.Errorf("failed to extract %s: %w", f.Name, err)
+		}
+
+		outFile.Close()
+		rc.Close()
+	}
+
+	return nil
+}
+
 // BuildSubmission converts a TestCollection into a CreateRunRequest.
 func BuildSubmission(tests *model.TestCollection, services *model.ServiceTemplateCollection, version string) (*CreateRunRequest, error) {
 	req := &CreateRunRequest{

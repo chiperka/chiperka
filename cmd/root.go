@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"spark-cli/internal/envfile"
 )
 
 // Exit codes for the CLI.
@@ -35,11 +36,25 @@ func exitErrorf(code int, format string, args ...interface{}) *ExitError {
 	return &ExitError{Code: code, Err: fmt.Errorf(format, args...)}
 }
 
+var envFiles []string
+
 var rootCmd = &cobra.Command{
 	Use:     "spark",
 	Short:   "Integration test runner with Docker isolation",
 	Long:    `Spark discovers and executes integration tests defined in *.spark files, running each test in isolated Docker containers with dedicated networks.`,
 	Version: Version,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if len(envFiles) > 0 {
+			if err := envfile.LoadAll(envFiles); err != nil {
+				return fmt.Errorf("failed to load env file: %w", err)
+			}
+		}
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringSliceVar(&envFiles, "env-file", nil, "Load environment variables from file (can be specified multiple times)")
 }
 
 func Execute() {

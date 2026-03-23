@@ -20,7 +20,7 @@ func TestValidateTest_Valid(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -41,7 +41,7 @@ func TestValidateTest_NoServices(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -63,7 +63,7 @@ func TestValidateTest_EmptyImage(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -85,7 +85,7 @@ func TestValidateTest_BrokenRef(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -107,7 +107,7 @@ func TestValidateTest_ValidRef(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -139,7 +139,7 @@ func TestValidateTest_RefEmptyImage(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -166,7 +166,7 @@ func TestValidateTest_MissingTarget(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -187,7 +187,7 @@ func TestValidateTest_MissingMethod(t *testing.T) {
 			Target:   "http://api",
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -211,7 +211,7 @@ func TestValidateTest_CLIExecutor(t *testing.T) {
 			},
 		},
 		Assertions: []model.Assertion{
-			{ExitCode: &model.ExitCodeAssertion{Equals: 0}},
+			{CLI: &model.CLIAssertion{ExitCode: intPtr(0)}},
 		},
 	}
 
@@ -233,7 +233,7 @@ func TestValidateTest_CLIMissingConfig(t *testing.T) {
 			Executor: model.ExecutorCLI,
 		},
 		Assertions: []model.Assertion{
-			{ExitCode: &model.ExitCodeAssertion{Equals: 0}},
+			{CLI: &model.CLIAssertion{ExitCode: intPtr(0)}},
 		},
 	}
 
@@ -256,7 +256,7 @@ func TestValidateTest_CLIMissingService(t *testing.T) {
 			},
 		},
 		Assertions: []model.Assertion{
-			{ExitCode: &model.ExitCodeAssertion{Equals: 0}},
+			{CLI: &model.CLIAssertion{ExitCode: intPtr(0)}},
 		},
 	}
 
@@ -279,7 +279,7 @@ func TestValidateTest_CLIMissingCommand(t *testing.T) {
 			},
 		},
 		Assertions: []model.Assertion{
-			{ExitCode: &model.ExitCodeAssertion{Equals: 0}},
+			{CLI: &model.CLIAssertion{ExitCode: intPtr(0)}},
 		},
 	}
 
@@ -342,7 +342,7 @@ func TestValidateTest_EmptyName(t *testing.T) {
 			Request:  model.HTTPRequest{Method: "GET", URL: "/"},
 		},
 		Assertions: []model.Assertion{
-			{StatusCode: &model.StatusCodeAssertion{Equals: 200}},
+			{Response: &model.ResponseAssertion{StatusCode: intPtr(200)}},
 		},
 	}
 
@@ -416,3 +416,5 @@ func searchSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func intPtr(v int) *int { return &v }

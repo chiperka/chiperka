@@ -16,7 +16,7 @@ const (
 // AssertionResult holds the outcome of a single assertion.
 type AssertionResult struct {
 	Passed   bool
-	Type     string // "statusCode", "exitCode", "snapshot", etc.
+	Type     string // "response.statusCode", "cli.exitCode", "artifact.<name>.exists", etc.
 	Expected string
 	Actual   string
 	Message  string

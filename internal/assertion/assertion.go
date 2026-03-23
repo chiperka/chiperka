@@ -3,9 +3,12 @@ package assertion
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"spark-cli/internal/executor"
@@ -20,217 +23,598 @@ func NewEvaluator() *Evaluator {
 	return &Evaluator{}
 }
 
-// EvaluateHTTP checks all assertions against the given HTTP response.
+// ArtifactInfo describes a collected artifact.
+type ArtifactInfo struct {
+	Name string
+	Path string
+	Size int64
+}
+
+// EvalContext provides all context needed for assertion evaluation.
+type EvalContext struct {
+	HTTPResponse      *executor.HTTPResponse
+	CLIResponse       *executor.CLIResponse
+	ExecutionDuration time.Duration
+	SuiteFilePath     string
+	Regenerate        bool
+	ArtifactInfos     []ArtifactInfo
+}
+
+// EvaluateAll checks all assertions against the provided context.
 // Returns a slice of assertion results and whether all assertions passed.
-func (e *Evaluator) EvaluateHTTP(assertions []model.Assertion, response *executor.HTTPResponse) ([]model.AssertionResult, bool) {
-	results := make([]model.AssertionResult, 0, len(assertions))
+func (e *Evaluator) EvaluateAll(assertions []model.Assertion, ctx EvalContext) ([]model.AssertionResult, bool) {
+	var results []model.AssertionResult
 	allPassed := true
 
 	for _, assertion := range assertions {
-		if assertion.StatusCode == nil {
-			continue // Skip non-HTTP assertions (handled by other evaluators)
-		}
-		start := time.Now()
-		result := e.evaluateHTTPAssertion(assertion, response)
-		result.Duration = time.Since(start)
-		results = append(results, result)
+		var subResults []model.AssertionResult
 
-		if !result.Passed {
-			allPassed = false
+		if assertion.Response != nil {
+			subResults = e.evaluateResponse(assertion.Response, ctx)
 		}
+		if assertion.CLI != nil {
+			subResults = append(subResults, e.evaluateCLI(assertion.CLI, ctx)...)
+		}
+		if assertion.Artifact != nil {
+			subResults = append(subResults, e.evaluateArtifact(assertion.Artifact, ctx)...)
+		}
+
+		for i := range subResults {
+			subResults[i].Duration = 0
+			if !subResults[i].Passed {
+				allPassed = false
+			}
+		}
+		results = append(results, subResults...)
 	}
 
 	return results, allPassed
 }
 
-// EvaluateCLI checks all assertions against the given CLI response.
-// Returns a slice of assertion results and whether all assertions passed.
-func (e *Evaluator) EvaluateCLI(assertions []model.Assertion, response *executor.CLIResponse) ([]model.AssertionResult, bool) {
-	results := make([]model.AssertionResult, 0, len(assertions))
-	allPassed := true
+// --- Response assertions ---
 
-	for _, assertion := range assertions {
-		if assertion.ExitCode == nil && assertion.Stdout == nil && assertion.Stderr == nil {
-			continue // Skip non-CLI assertions (handled by other evaluators)
+func (e *Evaluator) evaluateResponse(ra *model.ResponseAssertion, ctx EvalContext) []model.AssertionResult {
+	var results []model.AssertionResult
+	resp := ctx.HTTPResponse
+
+	if ra.StatusCode != nil {
+		actual := 0
+		if resp != nil {
+			actual = resp.StatusCode
 		}
-		start := time.Now()
-		result := e.evaluateCLIAssertion(assertion, response)
-		result.Duration = time.Since(start)
-		results = append(results, result)
+		passed := actual == *ra.StatusCode
+		r := model.AssertionResult{
+			Passed:   passed,
+			Type:     "response.statusCode",
+			Expected: fmt.Sprintf("%d", *ra.StatusCode),
+			Actual:   fmt.Sprintf("%d", actual),
+		}
+		if passed {
+			r.Message = fmt.Sprintf("Status code is %d", actual)
+		} else {
+			r.Message = fmt.Sprintf("Expected status code %d, got %d", *ra.StatusCode, actual)
+		}
+		results = append(results, r)
+	}
 
-		if !result.Passed {
-			allPassed = false
+	if ra.Headers != nil && resp != nil {
+		for name, matcher := range ra.Headers {
+			results = append(results, e.evaluateHeader(name, matcher, resp))
 		}
 	}
 
-	return results, allPassed
-}
-
-// evaluateHTTPAssertion checks a single assertion against the HTTP response.
-func (e *Evaluator) evaluateHTTPAssertion(assertion model.Assertion, response *executor.HTTPResponse) model.AssertionResult {
-	// Check status code assertion
-	if assertion.StatusCode != nil {
-		return e.evaluateStatusCode(assertion.StatusCode, response.StatusCode)
+	if ra.Body != nil && resp != nil {
+		results = append(results, e.evaluateResponseBody(ra.Body, resp, ctx)...)
 	}
 
-	// No assertion defined - consider it passed
+	if ra.Time != nil {
+		actualMs := ctx.ExecutionDuration.Milliseconds()
+		passed := actualMs <= int64(ra.Time.MaxMs)
+		r := model.AssertionResult{
+			Passed:   passed,
+			Type:     "response.time",
+			Expected: fmt.Sprintf("<= %dms", ra.Time.MaxMs),
+			Actual:   fmt.Sprintf("%dms", actualMs),
+		}
+		if passed {
+			r.Message = fmt.Sprintf("Response time %dms within limit %dms", actualMs, ra.Time.MaxMs)
+		} else {
+			r.Message = fmt.Sprintf("Response time %dms exceeds limit %dms", actualMs, ra.Time.MaxMs)
+		}
+		results = append(results, r)
+	}
+
+	return results
+}
+
+func (e *Evaluator) evaluateHeader(name string, matcher model.HeaderMatcher, resp *executor.HTTPResponse) model.AssertionResult {
+	actual := resp.Headers.Get(name)
+	headerExists := resp.Headers.Get(name) != "" || len(resp.Headers.Values(name)) > 0
+
+	if matcher.Exists != nil {
+		passed := headerExists == *matcher.Exists
+		r := model.AssertionResult{
+			Passed: passed,
+			Type:   fmt.Sprintf("response.headers.%s", name),
+		}
+		if *matcher.Exists {
+			r.Expected = "exists"
+			if headerExists {
+				r.Actual = "exists"
+				r.Message = fmt.Sprintf("Header %q exists", name)
+			} else {
+				r.Actual = "missing"
+				r.Message = fmt.Sprintf("Header %q not found", name)
+			}
+		} else {
+			r.Expected = "not exists"
+			if headerExists {
+				r.Actual = "exists"
+				r.Message = fmt.Sprintf("Header %q exists but expected it not to", name)
+			} else {
+				r.Actual = "missing"
+				r.Message = fmt.Sprintf("Header %q correctly absent", name)
+			}
+		}
+		return r
+	}
+
+	if matcher.Equals != "" {
+		passed := actual == matcher.Equals
+		return model.AssertionResult{
+			Passed:   passed,
+			Type:     fmt.Sprintf("response.headers.%s", name),
+			Expected: matcher.Equals,
+			Actual:   actual,
+			Message:  ifStr(passed, fmt.Sprintf("Header %q equals %q", name, matcher.Equals), fmt.Sprintf("Header %q: expected %q, got %q", name, matcher.Equals, actual)),
+		}
+	}
+
+	if matcher.Contains != "" {
+		passed := strings.Contains(actual, matcher.Contains)
+		return model.AssertionResult{
+			Passed:   passed,
+			Type:     fmt.Sprintf("response.headers.%s", name),
+			Expected: fmt.Sprintf("contains %q", matcher.Contains),
+			Actual:   actual,
+			Message:  ifStr(passed, fmt.Sprintf("Header %q contains %q", name, matcher.Contains), fmt.Sprintf("Header %q does not contain %q", name, matcher.Contains)),
+		}
+	}
+
+	return model.AssertionResult{Passed: true, Type: fmt.Sprintf("response.headers.%s", name), Message: "No header matcher specified"}
+}
+
+func (e *Evaluator) evaluateResponseBody(body *model.ResponseBodyAssertion, resp *executor.HTTPResponse, ctx EvalContext) []model.AssertionResult {
+	var results []model.AssertionResult
+	bodyStr := string(resp.Body)
+
+	for i, jp := range body.JsonPath {
+		results = append(results, e.evaluateJsonPath(i, jp, resp.Body))
+	}
+
+	if body.Contains != "" {
+		passed := strings.Contains(bodyStr, body.Contains)
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     "response.body.contains",
+			Expected: fmt.Sprintf("contains %q", body.Contains),
+			Actual:   truncateString(bodyStr, 200),
+			Message:  ifStr(passed, fmt.Sprintf("Body contains %q", body.Contains), fmt.Sprintf("Body does not contain %q", body.Contains)),
+		})
+	}
+
+	if body.Equals != "" {
+		passed := bodyStr == body.Equals
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     "response.body.equals",
+			Expected: truncateString(body.Equals, 200),
+			Actual:   truncateString(bodyStr, 200),
+			Message:  ifStr(passed, "Body matches expected value", "Body does not match expected value"),
+		})
+	}
+
+	if body.MinSize != nil {
+		size := int64(len(resp.Body))
+		passed := size >= *body.MinSize
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     "response.body.minSize",
+			Expected: fmt.Sprintf(">= %d", *body.MinSize),
+			Actual:   fmt.Sprintf("%d", size),
+			Message:  ifStr(passed, fmt.Sprintf("Body size %d >= %d", size, *body.MinSize), fmt.Sprintf("Body size %d < minimum %d", size, *body.MinSize)),
+		})
+	}
+
+	if body.Snapshot != "" {
+		results = append(results, e.evaluateBodySnapshot(body.Snapshot, resp.Body, ctx))
+	}
+
+	return results
+}
+
+func (e *Evaluator) evaluateJsonPath(index int, jp model.JsonPathCheck, body []byte) model.AssertionResult {
+	typeName := fmt.Sprintf("response.body.jsonPath[%d]", index)
+
+	var data interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return model.AssertionResult{Passed: false, Type: typeName, Expected: jp.Expected, Actual: "(invalid JSON)", Message: fmt.Sprintf("Failed to parse response body as JSON: %v", err)}
+	}
+
+	value, found := walkJsonPath(data, jp.Path)
+
+	if jp.Expected == "exists" {
+		r := model.AssertionResult{Passed: found, Type: typeName, Expected: fmt.Sprintf("%s exists", jp.Path)}
+		if found {
+			r.Actual = "exists"
+			r.Message = fmt.Sprintf("Path %s exists", jp.Path)
+		} else {
+			r.Actual = "not found"
+			r.Message = fmt.Sprintf("Path %s not found", jp.Path)
+		}
+		return r
+	}
+
+	if !found {
+		return model.AssertionResult{Passed: false, Type: typeName, Expected: jp.Expected, Actual: "(path not found)", Message: fmt.Sprintf("Path %s not found in response", jp.Path)}
+	}
+
+	actualStr := jsonValueToString(value)
+	passed := actualStr == jp.Expected
 	return model.AssertionResult{
-		Passed:  true,
-		Message: "No assertion defined",
-	}
-}
-
-// evaluateCLIAssertion checks a single assertion against the CLI response.
-func (e *Evaluator) evaluateCLIAssertion(assertion model.Assertion, response *executor.CLIResponse) model.AssertionResult {
-	// Check exit code assertion
-	if assertion.ExitCode != nil {
-		return e.evaluateExitCode(assertion.ExitCode, response.ExitCode)
-	}
-
-	// Check stdout assertion
-	if assertion.Stdout != nil {
-		return e.evaluateStdout(assertion.Stdout, response.Stdout)
-	}
-
-	// Check stderr assertion
-	if assertion.Stderr != nil {
-		return e.evaluateStderr(assertion.Stderr, response.Stderr)
-	}
-
-	// No assertion defined - consider it passed
-	return model.AssertionResult{
-		Passed:  true,
-		Message: "No assertion defined",
-	}
-}
-
-// evaluateStatusCode checks if the response status code matches expected.
-func (e *Evaluator) evaluateStatusCode(assertion *model.StatusCodeAssertion, actualCode int) model.AssertionResult {
-	passed := actualCode == assertion.Equals
-
-	result := model.AssertionResult{
 		Passed:   passed,
-		Type:     "statusCode",
-		Expected: fmt.Sprintf("%d", assertion.Equals),
-		Actual:   fmt.Sprintf("%d", actualCode),
-	}
-
-	if passed {
-		result.Message = fmt.Sprintf("Status code is %d", actualCode)
-	} else {
-		result.Message = fmt.Sprintf("Expected status code %d, got %d", assertion.Equals, actualCode)
-	}
-
-	return result
-}
-
-// evaluateExitCode checks if the CLI exit code matches expected.
-func (e *Evaluator) evaluateExitCode(assertion *model.ExitCodeAssertion, actualCode int) model.AssertionResult {
-	passed := actualCode == assertion.Equals
-
-	result := model.AssertionResult{
-		Passed:   passed,
-		Type:     "exitCode",
-		Expected: fmt.Sprintf("%d", assertion.Equals),
-		Actual:   fmt.Sprintf("%d", actualCode),
-	}
-
-	if passed {
-		result.Message = fmt.Sprintf("Exit code is %d", actualCode)
-	} else {
-		result.Message = fmt.Sprintf("Expected exit code %d, got %d", assertion.Equals, actualCode)
-	}
-
-	return result
-}
-
-// evaluateStdout checks if the CLI stdout contains or equals expected content.
-func (e *Evaluator) evaluateStdout(assertion *model.StdoutAssertion, stdout []byte) model.AssertionResult {
-	actual := string(stdout)
-
-	if assertion.Contains != "" {
-		passed := bytes.Contains(stdout, []byte(assertion.Contains))
-		result := model.AssertionResult{
-			Passed:   passed,
-			Type:     "stdout",
-			Expected: fmt.Sprintf("contains: %q", assertion.Contains),
-			Actual:   truncateString(actual, 200),
-		}
-		if passed {
-			result.Message = fmt.Sprintf("Stdout contains %q", assertion.Contains)
-		} else {
-			result.Message = fmt.Sprintf("Stdout does not contain %q", assertion.Contains)
-		}
-		return result
-	}
-
-	if assertion.Equals != "" {
-		passed := string(stdout) == assertion.Equals
-		result := model.AssertionResult{
-			Passed:   passed,
-			Type:     "stdout",
-			Expected: truncateString(assertion.Equals, 200),
-			Actual:   truncateString(actual, 200),
-		}
-		if passed {
-			result.Message = "Stdout matches expected value"
-		} else {
-			result.Message = "Stdout does not match expected value"
-		}
-		return result
-	}
-
-	return model.AssertionResult{
-		Passed:  true,
-		Type:    "stdout",
-		Message: "No stdout assertion criteria specified",
+		Type:     typeName,
+		Expected: jp.Expected,
+		Actual:   actualStr,
+		Message:  ifStr(passed, fmt.Sprintf("Path %s equals %q", jp.Path, jp.Expected), fmt.Sprintf("Path %s: expected %q, got %q", jp.Path, jp.Expected, actualStr)),
 	}
 }
 
-// evaluateStderr checks if the CLI stderr contains or equals expected content.
-func (e *Evaluator) evaluateStderr(assertion *model.StderrAssertion, stderr []byte) model.AssertionResult {
-	actual := string(stderr)
+func (e *Evaluator) evaluateBodySnapshot(snapshotFile string, body []byte, ctx EvalContext) model.AssertionResult {
+	suiteDir := filepath.Dir(ctx.SuiteFilePath)
+	snapshotPath := filepath.Join(suiteDir, snapshotFile)
 
-	if assertion.Contains != "" {
-		passed := bytes.Contains(stderr, []byte(assertion.Contains))
-		result := model.AssertionResult{
-			Passed:   passed,
-			Type:     "stderr",
-			Expected: fmt.Sprintf("contains: %q", assertion.Contains),
-			Actual:   truncateString(actual, 200),
+	if ctx.Regenerate {
+		if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
+			return model.AssertionResult{Passed: false, Type: "response.body.snapshot", Message: fmt.Sprintf("Failed to create directory: %v", err)}
 		}
-		if passed {
-			result.Message = fmt.Sprintf("Stderr contains %q", assertion.Contains)
-		} else {
-			result.Message = fmt.Sprintf("Stderr does not contain %q", assertion.Contains)
+		if err := os.WriteFile(snapshotPath, body, 0644); err != nil {
+			return model.AssertionResult{Passed: false, Type: "response.body.snapshot", Message: fmt.Sprintf("Failed to write snapshot: %v", err)}
 		}
-		return result
+		return model.AssertionResult{Passed: true, Type: "response.body.snapshot", Expected: snapshotFile, Actual: snapshotFile, Message: fmt.Sprintf("Snapshot %q updated", snapshotFile)}
 	}
 
-	if assertion.Equals != "" {
-		passed := string(stderr) == assertion.Equals
-		result := model.AssertionResult{
-			Passed:   passed,
-			Type:     "stderr",
-			Expected: truncateString(assertion.Equals, 200),
-			Actual:   truncateString(actual, 200),
+	expected, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.AssertionResult{Passed: false, Type: "response.body.snapshot", Expected: snapshotFile, Actual: "(file missing)", Message: fmt.Sprintf("Snapshot file %q not found. Run with --regenerate-snapshots to create.", snapshotFile)}
 		}
-		if passed {
-			result.Message = "Stderr matches expected value"
-		} else {
-			result.Message = "Stderr does not match expected value"
-		}
-		return result
+		return model.AssertionResult{Passed: false, Type: "response.body.snapshot", Message: fmt.Sprintf("Failed to read snapshot: %v", err)}
 	}
 
-	return model.AssertionResult{
-		Passed:  true,
-		Type:    "stderr",
-		Message: "No stderr assertion criteria specified",
+	if bytes.Equal(body, expected) {
+		return model.AssertionResult{Passed: true, Type: "response.body.snapshot", Expected: snapshotFile, Actual: snapshotFile, Message: fmt.Sprintf("Body matches snapshot %q", snapshotFile)}
+	}
+	return model.AssertionResult{Passed: false, Type: "response.body.snapshot", Expected: snapshotFile, Actual: "(differs)", Message: fmt.Sprintf("Body does not match snapshot %q. Run with --regenerate-snapshots to update.", snapshotFile)}
+}
+
+// --- CLI assertions ---
+
+func (e *Evaluator) evaluateCLI(ca *model.CLIAssertion, ctx EvalContext) []model.AssertionResult {
+	var results []model.AssertionResult
+	resp := ctx.CLIResponse
+
+	if ca.ExitCode != nil {
+		actual := 0
+		if resp != nil {
+			actual = resp.ExitCode
+		}
+		passed := actual == *ca.ExitCode
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     "cli.exitCode",
+			Expected: fmt.Sprintf("%d", *ca.ExitCode),
+			Actual:   fmt.Sprintf("%d", actual),
+			Message:  ifStr(passed, fmt.Sprintf("Exit code is %d", actual), fmt.Sprintf("Expected exit code %d, got %d", *ca.ExitCode, actual)),
+		})
+	}
+
+	if ca.Stdout != nil && resp != nil {
+		results = append(results, e.evaluateCLIOutput("cli.stdout", ca.Stdout, resp.Stdout, ctx)...)
+	}
+
+	if ca.Stderr != nil && resp != nil {
+		results = append(results, e.evaluateCLIOutput("cli.stderr", ca.Stderr, resp.Stderr, ctx)...)
+	}
+
+	return results
+}
+
+func (e *Evaluator) evaluateCLIOutput(typeName string, oa *model.CLIOutputAssertion, output []byte, ctx EvalContext) []model.AssertionResult {
+	var results []model.AssertionResult
+	actual := string(output)
+
+	if oa.Contains != "" {
+		passed := strings.Contains(actual, oa.Contains)
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     typeName,
+			Expected: fmt.Sprintf("contains %q", oa.Contains),
+			Actual:   truncateString(actual, 200),
+			Message:  ifStr(passed, fmt.Sprintf("%s contains %q", typeName, oa.Contains), fmt.Sprintf("%s does not contain %q", typeName, oa.Contains)),
+		})
+	}
+
+	if oa.Equals != "" {
+		passed := actual == oa.Equals
+		results = append(results, model.AssertionResult{
+			Passed:   passed,
+			Type:     typeName,
+			Expected: truncateString(oa.Equals, 200),
+			Actual:   truncateString(actual, 200),
+			Message:  ifStr(passed, fmt.Sprintf("%s matches expected value", typeName), fmt.Sprintf("%s does not match expected value", typeName)),
+		})
+	}
+
+	if oa.Snapshot != "" {
+		suiteDir := filepath.Dir(ctx.SuiteFilePath)
+		snapshotPath := filepath.Join(suiteDir, oa.Snapshot)
+
+		if ctx.Regenerate {
+			if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
+				results = append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to create directory: %v", err)})
+				return results
+			}
+			if err := os.WriteFile(snapshotPath, output, 0644); err != nil {
+				results = append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to write snapshot: %v", err)})
+				return results
+			}
+			results = append(results, model.AssertionResult{Passed: true, Type: typeName, Expected: oa.Snapshot, Actual: oa.Snapshot, Message: fmt.Sprintf("Snapshot %q updated", oa.Snapshot)})
+			return results
+		}
+
+		expected, err := os.ReadFile(snapshotPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				results = append(results, model.AssertionResult{Passed: false, Type: typeName, Expected: oa.Snapshot, Actual: "(file missing)", Message: fmt.Sprintf("Snapshot file %q not found. Run with --regenerate-snapshots to create.", oa.Snapshot)})
+			} else {
+				results = append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to read snapshot: %v", err)})
+			}
+			return results
+		}
+
+		if bytes.Equal(output, expected) {
+			results = append(results, model.AssertionResult{Passed: true, Type: typeName, Expected: oa.Snapshot, Actual: oa.Snapshot, Message: fmt.Sprintf("%s matches snapshot %q", typeName, oa.Snapshot)})
+		} else {
+			results = append(results, model.AssertionResult{Passed: false, Type: typeName, Expected: oa.Snapshot, Actual: "(differs)", Message: fmt.Sprintf("%s does not match snapshot %q", typeName, oa.Snapshot)})
+		}
+	}
+
+	return results
+}
+
+// --- Artifact assertions ---
+
+func (e *Evaluator) evaluateArtifact(aa *model.ArtifactAssertion, ctx EvalContext) []model.AssertionResult {
+	var results []model.AssertionResult
+	artifact := findArtifact(aa.Name, ctx.ArtifactInfos)
+	hasOtherChecks := aa.MinSize != nil || aa.MaxSize != nil || aa.Snapshot != ""
+
+	if aa.Exists != nil {
+		if *aa.Exists {
+			if artifact == nil {
+				return append(results, model.AssertionResult{Passed: false, Type: fmt.Sprintf("artifact.%s.exists", aa.Name), Expected: "exists", Actual: "not found", Message: fmt.Sprintf("Artifact %q not found", aa.Name)})
+			}
+			results = append(results, model.AssertionResult{Passed: true, Type: fmt.Sprintf("artifact.%s.exists", aa.Name), Expected: "exists", Actual: "exists", Message: fmt.Sprintf("Artifact %q exists", aa.Name)})
+		} else {
+			if artifact != nil {
+				return append(results, model.AssertionResult{Passed: false, Type: fmt.Sprintf("artifact.%s.exists", aa.Name), Expected: "not exists", Actual: "exists", Message: fmt.Sprintf("Artifact %q exists but expected it not to", aa.Name)})
+			}
+			return append(results, model.AssertionResult{Passed: true, Type: fmt.Sprintf("artifact.%s.exists", aa.Name), Expected: "not exists", Actual: "not found", Message: fmt.Sprintf("Artifact %q correctly does not exist", aa.Name)})
+		}
+	} else if hasOtherChecks && artifact == nil {
+		return append(results, model.AssertionResult{Passed: false, Type: fmt.Sprintf("artifact.%s.exists", aa.Name), Expected: "exists", Actual: "not found", Message: fmt.Sprintf("Artifact %q not found (required by other checks)", aa.Name)})
+	}
+
+	if artifact == nil {
+		return results
+	}
+
+	if aa.MinSize != nil || aa.MaxSize != nil {
+		passed := true
+		var msg string
+		if aa.MinSize != nil && artifact.Size < *aa.MinSize {
+			passed = false
+			msg = fmt.Sprintf("Artifact %q size %d below minimum %d", aa.Name, artifact.Size, *aa.MinSize)
+		} else if aa.MaxSize != nil && artifact.Size > *aa.MaxSize {
+			passed = false
+			msg = fmt.Sprintf("Artifact %q size %d exceeds maximum %d", aa.Name, artifact.Size, *aa.MaxSize)
+		} else {
+			msg = fmt.Sprintf("Artifact %q size %d within bounds", aa.Name, artifact.Size)
+		}
+
+		expected := "size"
+		if aa.MinSize != nil {
+			expected += fmt.Sprintf(" >= %d", *aa.MinSize)
+		}
+		if aa.MaxSize != nil {
+			expected += fmt.Sprintf(" <= %d", *aa.MaxSize)
+		}
+
+		results = append(results, model.AssertionResult{Passed: passed, Type: fmt.Sprintf("artifact.%s.size", aa.Name), Expected: expected, Actual: fmt.Sprintf("%d", artifact.Size), Message: msg})
+	}
+
+	if aa.Snapshot != "" {
+		suiteDir := filepath.Dir(ctx.SuiteFilePath)
+		snapshotPath := filepath.Join(suiteDir, aa.Snapshot)
+		typeName := fmt.Sprintf("artifact.%s.snapshot", aa.Name)
+
+		actualContent, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			return append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to read artifact: %v", err)})
+		}
+
+		if ctx.Regenerate {
+			if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
+				return append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to create directory: %v", err)})
+			}
+			if err := os.WriteFile(snapshotPath, actualContent, 0644); err != nil {
+				return append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to write snapshot: %v", err)})
+			}
+			return append(results, model.AssertionResult{Passed: true, Type: typeName, Expected: aa.Snapshot, Actual: aa.Snapshot, Message: fmt.Sprintf("Snapshot %q updated", aa.Snapshot)})
+		}
+
+		expectedContent, err := os.ReadFile(snapshotPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return append(results, model.AssertionResult{Passed: false, Type: typeName, Expected: aa.Snapshot, Actual: "(file missing)", Message: fmt.Sprintf("Snapshot file %q not found. Run with --regenerate-snapshots to create.", aa.Snapshot)})
+			}
+			return append(results, model.AssertionResult{Passed: false, Type: typeName, Message: fmt.Sprintf("Failed to read snapshot: %v", err)})
+		}
+
+		if bytes.Equal(actualContent, expectedContent) {
+			results = append(results, model.AssertionResult{Passed: true, Type: typeName, Expected: aa.Snapshot, Actual: aa.Snapshot, Message: fmt.Sprintf("Artifact %q matches snapshot %q", aa.Name, aa.Snapshot)})
+		} else {
+			results = append(results, model.AssertionResult{Passed: false, Type: typeName, Expected: aa.Snapshot, Actual: "(differs)", Message: fmt.Sprintf("Artifact %q does not match snapshot %q", aa.Name, aa.Snapshot)})
+		}
+	}
+
+	return results
+}
+
+// --- JSONPath walker ---
+
+func walkJsonPath(data interface{}, path string) (interface{}, bool) {
+	if !strings.HasPrefix(path, "$") {
+		return nil, false
+	}
+	path = strings.TrimPrefix(path, "$")
+	if path == "" {
+		return data, true
+	}
+	path = strings.TrimPrefix(path, ".")
+	return walkPath(data, path)
+}
+
+func walkPath(data interface{}, path string) (interface{}, bool) {
+	if path == "" {
+		return data, true
+	}
+
+	segment, rest := nextSegment(path)
+
+	if idx := strings.Index(segment, "["); idx >= 0 {
+		field := segment[:idx]
+		indexStr := segment[idx+1 : len(segment)-1]
+
+		var current interface{} = data
+		if field != "" {
+			obj, ok := current.(map[string]interface{})
+			if !ok {
+				return nil, false
+			}
+			val, exists := obj[field]
+			if !exists {
+				return nil, false
+			}
+			current = val
+		}
+
+		arr, ok := current.([]interface{})
+		if !ok {
+			return nil, false
+		}
+
+		if indexStr == "*" {
+			var collected []interface{}
+			for _, elem := range arr {
+				if rest == "" {
+					collected = append(collected, elem)
+				} else {
+					if val, found := walkPath(elem, rest); found {
+						collected = append(collected, val)
+					}
+				}
+			}
+			if len(collected) == 0 {
+				return nil, false
+			}
+			return collected, true
+		}
+
+		index, err := strconv.Atoi(indexStr)
+		if err != nil {
+			return nil, false
+		}
+		if index < 0 {
+			index = len(arr) + index
+		}
+		if index < 0 || index >= len(arr) {
+			return nil, false
+		}
+		return walkPath(arr[index], rest)
+	}
+
+	obj, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	val, exists := obj[segment]
+	if !exists {
+		return nil, false
+	}
+	return walkPath(val, rest)
+}
+
+func nextSegment(path string) (string, string) {
+	inBracket := false
+	for i, ch := range path {
+		if ch == '[' {
+			inBracket = true
+		} else if ch == ']' {
+			inBracket = false
+		} else if ch == '.' && !inBracket {
+			return path[:i], path[i+1:]
+		}
+	}
+	return path, ""
+}
+
+func jsonValueToString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		if val == float64(int64(val)) {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(val)
+	case nil:
+		return "null"
+	default:
+		b, _ := json.Marshal(val)
+		return string(b)
 	}
 }
 
-// truncateString truncates a string to the specified max length with ellipsis.
+// --- Helpers ---
+
+func findArtifact(name string, artifacts []ArtifactInfo) *ArtifactInfo {
+	for i := range artifacts {
+		if artifacts[i].Name == name {
+			return &artifacts[i]
+		}
+	}
+	for i := range artifacts {
+		if filepath.Base(artifacts[i].Name) == name {
+			return &artifacts[i]
+		}
+	}
+	return nil
+}
+
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -238,149 +622,9 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// SnapshotContext provides context needed for snapshot assertions.
-type SnapshotContext struct {
-	// SuiteFilePath is the path to the test suite file (for resolving relative paths)
-	SuiteFilePath string
-	// Artifacts maps artifact names to their file paths
-	Artifacts map[string]string
-	// Regenerate indicates whether to update snapshots instead of comparing
-	Regenerate bool
-}
-
-// EvaluateSnapshots checks all snapshot assertions.
-// Returns a slice of assertion results and whether all assertions passed.
-func (e *Evaluator) EvaluateSnapshots(assertions []model.Assertion, ctx SnapshotContext) ([]model.AssertionResult, bool) {
-	var results []model.AssertionResult
-	allPassed := true
-
-	for _, assertion := range assertions {
-		if assertion.Snapshot == nil {
-			continue
-		}
-
-		start := time.Now()
-		result := e.evaluateSnapshot(assertion.Snapshot, ctx)
-		result.Duration = time.Since(start)
-		results = append(results, result)
-
-		if !result.Passed {
-			allPassed = false
-		}
+func ifStr(cond bool, t, f string) string {
+	if cond {
+		return t
 	}
-
-	return results, allPassed
-}
-
-// evaluateSnapshot compares an artifact with an expected snapshot file.
-func (e *Evaluator) evaluateSnapshot(assertion *model.SnapshotAssertion, ctx SnapshotContext) model.AssertionResult {
-	// Resolve snapshot file path relative to test suite file
-	suiteDir := filepath.Dir(ctx.SuiteFilePath)
-	snapshotPath := filepath.Join(suiteDir, assertion.File)
-
-	// Find the artifact
-	artifactPath, ok := ctx.Artifacts[assertion.Artifact]
-	if !ok {
-		return model.AssertionResult{
-			Passed:   false,
-			Type:     "snapshot",
-			Expected: assertion.File,
-			Actual:   "(artifact not found)",
-			Message:  fmt.Sprintf("Artifact '%s' not found. Available: %v", assertion.Artifact, mapKeys(ctx.Artifacts)),
-		}
-	}
-
-	// Read the actual artifact content
-	actualContent, err := os.ReadFile(artifactPath)
-	if err != nil {
-		return model.AssertionResult{
-			Passed:   false,
-			Type:     "snapshot",
-			Expected: assertion.File,
-			Actual:   "(read error)",
-			Message:  fmt.Sprintf("Failed to read artifact '%s': %v", assertion.Artifact, err),
-		}
-	}
-
-	// Regenerate mode: write the snapshot file
-	if ctx.Regenerate {
-		// Create directories if needed
-		if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
-			return model.AssertionResult{
-				Passed:   false,
-				Type:     "snapshot",
-				Expected: assertion.File,
-				Actual:   "(write error)",
-				Message:  fmt.Sprintf("Failed to create snapshot directory: %v", err),
-			}
-		}
-
-		if err := os.WriteFile(snapshotPath, actualContent, 0644); err != nil {
-			return model.AssertionResult{
-				Passed:   false,
-				Type:     "snapshot",
-				Expected: assertion.File,
-				Actual:   "(write error)",
-				Message:  fmt.Sprintf("Failed to write snapshot file: %v", err),
-			}
-		}
-
-		return model.AssertionResult{
-			Passed:   true,
-			Type:     "snapshot",
-			Expected: assertion.File,
-			Actual:   assertion.File,
-			Message:  fmt.Sprintf("Snapshot '%s' updated from artifact '%s'", assertion.File, assertion.Artifact),
-		}
-	}
-
-	// Compare mode: read expected and compare
-	expectedContent, err := os.ReadFile(snapshotPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return model.AssertionResult{
-				Passed:   false,
-				Type:     "snapshot",
-				Expected: assertion.File,
-				Actual:   "(file missing)",
-				Message:  fmt.Sprintf("Snapshot file '%s' not found. Run with --regenerate-snapshots to create it.", assertion.File),
-			}
-		}
-		return model.AssertionResult{
-			Passed:   false,
-			Type:     "snapshot",
-			Expected: assertion.File,
-			Actual:   "(read error)",
-			Message:  fmt.Sprintf("Failed to read snapshot file '%s': %v", assertion.File, err),
-		}
-	}
-
-	// Compare content
-	if bytes.Equal(actualContent, expectedContent) {
-		return model.AssertionResult{
-			Passed:   true,
-			Type:     "snapshot",
-			Expected: assertion.File,
-			Actual:   assertion.File,
-			Message:  fmt.Sprintf("Snapshot '%s' matches artifact '%s'", assertion.File, assertion.Artifact),
-		}
-	}
-
-	// Content differs
-	return model.AssertionResult{
-		Passed:   false,
-		Type:     "snapshot",
-		Expected: assertion.File,
-		Actual:   fmt.Sprintf("%s (differs)", assertion.Artifact),
-		Message:  fmt.Sprintf("Snapshot '%s' does not match artifact '%s'. Run with --regenerate-snapshots to update.", assertion.File, assertion.Artifact),
-	}
-}
-
-// mapKeys returns the keys of a map as a slice.
-func mapKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
+	return f
 }

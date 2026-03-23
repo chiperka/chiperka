@@ -973,6 +973,22 @@ func (m *Manager) collectServiceLogs(ctx context.Context, collector *artifact.Co
 	m.events.ArtifactSave(filename, path, size)
 }
 
+// CollectServiceArtifacts collects user-defined artifacts from running containers without stopping them.
+// This allows artifact assertions to access service artifacts before cleanup.
+func (m *Manager) CollectServiceArtifacts(ctx context.Context, collector *artifact.Collector, uuid string) {
+	var wg sync.WaitGroup
+	for name, containerID := range m.runningContainers {
+		if defs, ok := m.serviceArtifactDefs[name]; ok {
+			wg.Add(1)
+			go func(name, containerID string, defs []model.ServiceArtifact) {
+				defer wg.Done()
+				m.collectServiceArtifacts(ctx, collector, uuid, name, containerID, defs)
+			}(name, containerID, defs)
+		}
+	}
+	wg.Wait()
+}
+
 // collectServiceArtifacts extracts external artifacts from a container using Docker CopyFromContainer API.
 func (m *Manager) collectServiceArtifacts(ctx context.Context, collector *artifact.Collector, uuid, serviceName, containerID string, defs []model.ServiceArtifact) {
 	for _, def := range defs {

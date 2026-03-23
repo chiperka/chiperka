@@ -918,14 +918,14 @@ func TestTypedEvent_AssertResult_Pass(t *testing.T) {
 
 	e := events.NewTestEvent(events.TestAssertResult, "suite", "test1")
 	e.Data.Status = "pass"
-	e.Data.Details["assertion"] = "statusCode"
+	e.Data.Details["assertion"] = "response.statusCode"
 	e.Data.Details["expected"] = 200
 	e.Data.Details["actual"] = 200
 	bus.Emit(e)
 
 	output := buf.String()
 	assertContains(t, output, "testStdOut")
-	assertContains(t, output, "\u2713 statusCode")
+	assertContains(t, output, "\u2713 response.statusCode")
 }
 
 func TestTypedEvent_AssertResult_Fail(t *testing.T) {
@@ -938,7 +938,7 @@ func TestTypedEvent_AssertResult_Fail(t *testing.T) {
 
 	e := events.NewTestEvent(events.TestAssertResult, "suite", "test1")
 	e.Data.Status = "fail"
-	e.Data.Details["assertion"] = "statusCode"
+	e.Data.Details["assertion"] = "response.statusCode"
 	e.Data.Details["expected"] = 200
 	e.Data.Details["actual"] = 500
 	bus.Emit(e)
@@ -948,8 +948,8 @@ func TestTypedEvent_AssertResult_Fail(t *testing.T) {
 		WithDuration(100 * time.Millisecond))
 
 	output := buf.String()
-	assertContains(t, output, "\u2717 statusCode (expected: 200, got: 500)")
-	assertContains(t, output, "message='statusCode'")
+	assertContains(t, output, "\u2717 response.statusCode (expected: 200, got: 500)")
+	assertContains(t, output, "message='response.statusCode'")
 	assertContains(t, output, "expected='200'")
 	assertContains(t, output, "actual='500'")
 }

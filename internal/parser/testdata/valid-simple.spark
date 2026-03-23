@@ -7,5 +7,5 @@ tests:
         method: GET
         url: /health
     assertions:
-      - statusCode:
-          equals: 200
+      - response:
+          statusCode: 200

@@ -91,7 +91,7 @@ type HTMLLogEntry struct {
 
 // HTMLAssertionData holds assertion data for the HTML template.
 type HTMLAssertionData struct {
-	Type        string // "statusCode", "exitCode", "snapshot", etc.
+	Type        string // "response.statusCode", "cli.exitCode", "artifact.<name>.exists", etc.
 	Message     string
 	Passed      bool
 	StatusClass string

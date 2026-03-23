@@ -247,11 +247,9 @@ func handleRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 
 	// Return the full parsed structure — suites with all test details
 	type readAssertion struct {
-		StatusCode *model.StatusCodeAssertion `json:"status_code,omitempty"`
-		ExitCode   *model.ExitCodeAssertion   `json:"exit_code,omitempty"`
-		Snapshot   *model.SnapshotAssertion   `json:"snapshot,omitempty"`
-		Stdout     *model.StdoutAssertion     `json:"stdout,omitempty"`
-		Stderr     *model.StderrAssertion     `json:"stderr,omitempty"`
+		Response *model.ResponseAssertion `json:"response,omitempty"`
+		CLI      *model.CLIAssertion      `json:"cli,omitempty"`
+		Artifact *model.ArtifactAssertion `json:"artifact,omitempty"`
 	}
 	type readService struct {
 		Name        string            `json:"name,omitempty"`
@@ -382,11 +380,9 @@ func handleRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 			// Assertions
 			for _, a := range test.Assertions {
 				rt.Assertions = append(rt.Assertions, readAssertion{
-					StatusCode: a.StatusCode,
-					ExitCode:   a.ExitCode,
-					Snapshot:   a.Snapshot,
-					Stdout:     a.Stdout,
-					Stderr:     a.Stderr,
+					Response: a.Response,
+					CLI:      a.CLI,
+					Artifact: a.Artifact,
 				})
 			}
 

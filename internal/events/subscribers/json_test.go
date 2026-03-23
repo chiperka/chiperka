@@ -405,7 +405,7 @@ func TestJSONAssertResult_TypedEvent(t *testing.T) {
 	// Typed assertion result (pass)
 	passEvent := events.NewTestEvent(events.TestAssertResult, "suite", "test1")
 	passEvent.Data.Status = "pass"
-	passEvent.Data.Details["assertion"] = "statusCode"
+	passEvent.Data.Details["assertion"] = "response.statusCode"
 	passEvent.Data.Details["expected"] = 200
 	passEvent.Data.Details["actual"] = 200
 	bus.Emit(passEvent)
@@ -442,8 +442,8 @@ func TestJSONAssertResult_TypedEvent(t *testing.T) {
 
 	// First: pass (no expected/actual)
 	a1 := assertions[0].(map[string]any)
-	if a1["assertion"] != "statusCode" {
-		t.Errorf("expected assertion=statusCode, got %v", a1["assertion"])
+	if a1["assertion"] != "response.statusCode" {
+		t.Errorf("expected assertion=response.statusCode, got %v", a1["assertion"])
 	}
 	if a1["status"] != "pass" {
 		t.Errorf("expected status=pass, got %v", a1["status"])

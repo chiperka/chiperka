@@ -1125,11 +1125,35 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		// Run teardown before assertions
 		runTeardown()
 
-		// Evaluate assertions
+		// Collect service artifacts before assertion evaluation (containers still running)
+		if dockerManager != nil {
+			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
+		}
+
+		// Build artifact info list
+		var artifactInfos []assertion.ArtifactInfo
+		if collectedArtifacts, err := r.collector.ListArtifacts(uuid); err == nil {
+			for _, a := range collectedArtifacts {
+				artifactInfos = append(artifactInfos, assertion.ArtifactInfo{
+					Name: a.Name,
+					Path: a.Path,
+					Size: a.Size,
+				})
+			}
+		}
+
+		// Evaluate all assertions in a single pass
+		evalCtx := assertion.EvalContext{
+			HTTPResponse:      response,
+			ExecutionDuration: result.ExecutionDuration,
+			SuiteFilePath:     suiteFilePath,
+			Regenerate:        r.regenerateSnapshots,
+			ArtifactInfos:     artifactInfos,
+		}
 		assertionsStart := time.Now()
-		assertionResults, allPassed := r.evaluator.EvaluateHTTP(test.Assertions, response)
+		assertionResults, allPassed := r.evaluator.EvaluateAll(test.Assertions, evalCtx)
 		result.AssertionDuration = time.Since(assertionsStart)
-		result.AssertionResults = assertionResults
+		result.AssertionResults = append(result.AssertionResults, assertionResults...)
 
 		for _, ar := range assertionResults {
 			if ar.Passed {
@@ -1156,9 +1180,6 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		if !allPassed {
 			result.Status = model.StatusFailed
 		}
-
-		// Evaluate snapshot assertions
-		r.evaluateSnapshotAssertions(ctx, test, &result, suiteFilePath)
 
 	case model.ExecutorCLI:
 		if dockerManager == nil {
@@ -1240,16 +1261,40 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		// Run teardown before assertions
 		runTeardown()
 
-		// Evaluate assertions
+		// Collect service artifacts before assertion evaluation (containers still running)
+		if dockerManager != nil {
+			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
+		}
+
+		// Build artifact info list
+		var cliArtifactInfos []assertion.ArtifactInfo
+		if collectedArtifacts, err := r.collector.ListArtifacts(uuid); err == nil {
+			for _, a := range collectedArtifacts {
+				cliArtifactInfos = append(cliArtifactInfos, assertion.ArtifactInfo{
+					Name: a.Name,
+					Path: a.Path,
+					Size: a.Size,
+				})
+			}
+		}
+
+		// Evaluate all assertions in a single pass
 		cliResponse := &executor.CLIResponse{
 			ExitCode: execResult.ExitCode,
 			Stdout:   execResult.Stdout,
 			Stderr:   execResult.Stderr,
 		}
+		evalCtx := assertion.EvalContext{
+			CLIResponse:       cliResponse,
+			ExecutionDuration: result.ExecutionDuration,
+			SuiteFilePath:     suiteFilePath,
+			Regenerate:        r.regenerateSnapshots,
+			ArtifactInfos:     cliArtifactInfos,
+		}
 		assertionsStart := time.Now()
-		assertionResults, allPassed := r.evaluator.EvaluateCLI(test.Assertions, cliResponse)
+		assertionResults, allPassed := r.evaluator.EvaluateAll(test.Assertions, evalCtx)
 		result.AssertionDuration = time.Since(assertionsStart)
-		result.AssertionResults = assertionResults
+		result.AssertionResults = append(result.AssertionResults, assertionResults...)
 
 		for _, ar := range assertionResults {
 			if ar.Passed {
@@ -1277,89 +1322,12 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 			result.Status = model.StatusFailed
 		}
 
-		// Evaluate snapshot assertions
-		r.evaluateSnapshotAssertions(ctx, test, &result, suiteFilePath)
-
 	default:
 		result.Status = model.StatusError
 		result.Error = fmt.Errorf("unknown executor type: %s", test.Execution.Executor)
 	}
 
 	return result
-}
-
-// evaluateSnapshotAssertions evaluates snapshot assertions for a test.
-// It builds artifact map from result and calls the snapshot evaluator.
-func (r *Runner) evaluateSnapshotAssertions(ctx context.Context, test model.Test, result *model.TestResult, suiteFilePath string) {
-	// Check if there are any snapshot assertions
-	hasSnapshots := false
-	for _, a := range test.Assertions {
-		if a.Snapshot != nil {
-			hasSnapshots = true
-			break
-		}
-	}
-	if !hasSnapshots {
-		return
-	}
-
-	// Build artifact map from result
-	artifacts := make(map[string]string)
-
-	// Add HTTP response body artifact
-	if result.HTTPResponse != nil && result.HTTPResponse.BodyArtifact != nil {
-		artifacts["responseBody"] = result.HTTPResponse.BodyArtifact.Path
-	}
-
-	// Add CLI artifacts
-	if result.CLIResponse != nil {
-		if result.CLIResponse.StdoutArtifact != nil {
-			artifacts["stdout"] = result.CLIResponse.StdoutArtifact.Path
-		}
-		if result.CLIResponse.StderrArtifact != nil {
-			artifacts["stderr"] = result.CLIResponse.StderrArtifact.Path
-		}
-	}
-
-	// Evaluate snapshot assertions
-	snapshotCtx := assertion.SnapshotContext{
-		SuiteFilePath: suiteFilePath,
-		Artifacts:     artifacts,
-		Regenerate:    r.regenerateSnapshots,
-	}
-
-	snapshotResults, snapshotsAllPassed := r.evaluator.EvaluateSnapshots(test.Assertions, snapshotCtx)
-
-	// Append snapshot results to assertion results
-	result.AssertionResults = append(result.AssertionResults, snapshotResults...)
-
-	// Emit events for snapshot assertions
-	for _, ar := range snapshotResults {
-		if ar.Passed {
-			r.emit(ctx).Info(events.Fields{
-				"test":     test.Name,
-				"action":   "assertion_pass",
-				"type":     ar.Type,
-				"expected": ar.Expected,
-				"actual":   ar.Actual,
-				"msg":      ar.Message,
-			})
-		} else {
-			r.emit(ctx).Fail(events.Fields{
-				"test":     test.Name,
-				"action":   "assertion_fail",
-				"type":     ar.Type,
-				"expected": ar.Expected,
-				"actual":   ar.Actual,
-				"msg":      ar.Message,
-			})
-		}
-	}
-
-	// Update status if snapshot assertions failed
-	if !snapshotsAllPassed && result.Status == model.StatusPassed {
-		result.Status = model.StatusFailed
-	}
 }
 
 // saveResponseBodyArtifact saves the HTTP response body as an artifact.

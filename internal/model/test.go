@@ -501,45 +501,69 @@ func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error)
 	return resolved, nil
 }
 
-// StatusCodeAssertion checks the HTTP response status code.
-type StatusCodeAssertion struct {
-	Equals int `yaml:"equals" json:"equals"`
+// HeaderMatcher checks a single response header value.
+type HeaderMatcher struct {
+	Equals   string `yaml:"equals,omitempty" json:"equals,omitempty"`
+	Contains string `yaml:"contains,omitempty" json:"contains,omitempty"`
+	Exists   *bool  `yaml:"exists,omitempty" json:"exists,omitempty"`
 }
 
-// ExitCodeAssertion checks the CLI command exit code.
-type ExitCodeAssertion struct {
-	Equals int `yaml:"equals" json:"equals"`
+// JsonPathCheck checks a single JSONPath expression against the response body.
+type JsonPathCheck struct {
+	Path     string `yaml:"path" json:"path"`
+	Expected string `yaml:"expected" json:"expected"` // value or "exists"
 }
 
-// SnapshotAssertion compares an artifact with an expected file (snapshot).
-// If the file doesn't match, the test fails.
-// With --regenerate-snapshots flag, the file is created/updated instead of compared.
-type SnapshotAssertion struct {
-	// Artifact is the name of the artifact to compare (e.g., "responseBody", "stdout", "stderr")
-	Artifact string `yaml:"artifact" json:"artifact"`
-	// File is the path to the expected snapshot file (relative to the test file)
-	File string `yaml:"file" json:"file"`
+// ResponseBodyAssertion checks properties of the HTTP response body.
+type ResponseBodyAssertion struct {
+	JsonPath []JsonPathCheck `yaml:"jsonPath,omitempty" json:"json_path,omitempty"`
+	Contains string          `yaml:"contains,omitempty" json:"contains,omitempty"`
+	Equals   string          `yaml:"equals,omitempty" json:"equals,omitempty"`
+	MinSize  *int64          `yaml:"minSize,omitempty" json:"min_size,omitempty"`
+	Snapshot string          `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 }
 
-// StdoutAssertion checks the CLI command stdout output.
-type StdoutAssertion struct {
+// ResponseTimeAssertion checks HTTP response timing.
+type ResponseTimeAssertion struct {
+	MaxMs int `yaml:"maxMs" json:"max_ms"`
+}
+
+// ResponseAssertion groups all HTTP response checks.
+type ResponseAssertion struct {
+	StatusCode *int                     `yaml:"statusCode,omitempty" json:"status_code,omitempty"`
+	Headers    map[string]HeaderMatcher `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body       *ResponseBodyAssertion   `yaml:"body,omitempty" json:"body,omitempty"`
+	Time       *ResponseTimeAssertion   `yaml:"time,omitempty" json:"time,omitempty"`
+}
+
+// CLIOutputAssertion checks stdout or stderr content.
+type CLIOutputAssertion struct {
 	Contains string `yaml:"contains,omitempty" json:"contains,omitempty"`
 	Equals   string `yaml:"equals,omitempty" json:"equals,omitempty"`
+	Snapshot string `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 }
 
-// StderrAssertion checks the CLI command stderr output.
-type StderrAssertion struct {
-	Contains string `yaml:"contains,omitempty" json:"contains,omitempty"`
-	Equals   string `yaml:"equals,omitempty" json:"equals,omitempty"`
+// CLIAssertion groups all CLI command checks.
+type CLIAssertion struct {
+	ExitCode *int                `yaml:"exitCode,omitempty" json:"exit_code,omitempty"`
+	Stdout   *CLIOutputAssertion `yaml:"stdout,omitempty" json:"stdout,omitempty"`
+	Stderr   *CLIOutputAssertion `yaml:"stderr,omitempty" json:"stderr,omitempty"`
+}
+
+// ArtifactAssertion checks properties of a collected artifact (service logs, files extracted from containers).
+type ArtifactAssertion struct {
+	Name     string `yaml:"name" json:"name"`
+	Exists   *bool  `yaml:"exists,omitempty" json:"exists,omitempty"`
+	MinSize  *int64 `yaml:"minSize,omitempty" json:"min_size,omitempty"`
+	MaxSize  *int64 `yaml:"maxSize,omitempty" json:"max_size,omitempty"`
+	Snapshot string `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 }
 
 // Assertion defines what to verify after test execution.
 type Assertion struct {
-	StatusCode *StatusCodeAssertion `yaml:"statusCode,omitempty" json:"status_code,omitempty"`
-	ExitCode   *ExitCodeAssertion   `yaml:"exitCode,omitempty" json:"exit_code,omitempty"`
-	Snapshot   *SnapshotAssertion   `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
-	Stdout     *StdoutAssertion     `yaml:"stdout,omitempty" json:"stdout,omitempty"`
-	Stderr     *StderrAssertion     `yaml:"stderr,omitempty" json:"stderr,omitempty"`
+	Response *ResponseAssertion `yaml:"response,omitempty" json:"response,omitempty"`
+	CLI      *CLIAssertion      `yaml:"cli,omitempty" json:"cli,omitempty"`
+	Artifact *ArtifactAssertion `yaml:"artifact,omitempty" json:"artifact,omitempty"`
 }
 
 // SetupHTTP defines an HTTP request for setup.

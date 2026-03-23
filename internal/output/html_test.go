@@ -147,7 +147,7 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 						},
 					},
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
+						{Passed: true, Type: "response.statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
 					},
 					HTTPResponse: &model.HTTPResponseData{StatusCode: 200},
 				}
@@ -176,7 +176,7 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 					ExecutionDuration: 95 * time.Millisecond,
 					UUID:              "failed-assertions-uuid",
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
+						{Passed: true, Type: "response.statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
 						{Passed: false, Type: "jsonPath", Expected: "John", Actual: "Jane", Message: "$.name equals John", Duration: 2 * time.Millisecond},
 					},
 					HTTPResponse: &model.HTTPResponseData{
@@ -294,7 +294,7 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 					},
 					HTTPResponse: &model.HTTPResponseData{StatusCode: 200},
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
+						{Passed: true, Type: "response.statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 1 * time.Millisecond},
 					},
 				}
 			},
@@ -323,7 +323,7 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 					ExecutionDuration: 2200 * time.Millisecond,
 					UUID:              "cli-exec-uuid",
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "exitCode", Expected: "0", Actual: "0", Message: "Exit code equals 0", Duration: 1 * time.Millisecond},
+						{Passed: true, Type: "cli.exitCode", Expected: "0", Actual: "0", Message: "Exit code equals 0", Duration: 1 * time.Millisecond},
 					},
 					CLIResponse: &model.CLIResponseData{
 						ExitCode: 0,
@@ -458,7 +458,7 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 						},
 					},
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 2 * time.Millisecond},
+						{Passed: true, Type: "response.statusCode", Expected: "200", Actual: "200", Message: "Status code equals 200", Duration: 2 * time.Millisecond},
 						{Passed: true, Type: "jsonPath", Expected: "exists", Actual: "eyJhbGciOiJIUzI1NiJ9", Message: "$.token exists", Duration: 3 * time.Millisecond},
 					},
 					HTTPResponse: &model.HTTPResponseData{
@@ -503,8 +503,8 @@ func TestHTML_WriteTestReport_Snapshots(t *testing.T) {
 					ExecutionDuration: 100 * time.Millisecond,
 					UUID:              "snapshot-test-uuid",
 					AssertionResults: []model.AssertionResult{
-						{Passed: true, Type: "snapshot", Expected: "snapshots/config.json", Actual: "snapshots/config.json", Message: "Snapshot matches snapshots/config.json", Duration: 5 * time.Millisecond},
-						{Passed: false, Type: "snapshot", Expected: `{"version":"1.0"}`, Actual: `{"version":"2.0"}`, Message: "Snapshot matches snapshots/version.json", Duration: 3 * time.Millisecond},
+						{Passed: true, Type: "response.body.snapshot", Expected: "snapshots/config.json", Actual: "snapshots/config.json", Message: "Snapshot matches snapshots/config.json", Duration: 5 * time.Millisecond},
+						{Passed: false, Type: "response.body.snapshot", Expected: `{"version":"1.0"}`, Actual: `{"version":"2.0"}`, Message: "Snapshot matches snapshots/version.json", Duration: 3 * time.Millisecond},
 					},
 					HTTPResponse: &model.HTTPResponseData{StatusCode: 200},
 				}

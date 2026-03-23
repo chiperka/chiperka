@@ -13,9 +13,10 @@ import (
 // Shows only completed tests with progress percentage.
 // Designed for CI environments (no dynamic updates, just appending lines).
 type CLIReporter struct {
-	out     io.Writer
-	color   bool
-	mu      sync.Mutex
+	out       io.Writer
+	color     bool
+	cloudMode bool
+	mu        sync.Mutex
 
 	// Progress tracking
 	totalTests  int
@@ -37,6 +38,11 @@ func NewCLIReporter(w io.Writer) *CLIReporter {
 // SetColor enables or disables colored output.
 func (c *CLIReporter) SetColor(enabled bool) {
 	c.color = enabled
+}
+
+// SetCloudMode sets the cloud mode flag for display purposes.
+func (c *CLIReporter) SetCloudMode(enabled bool) {
+	c.cloudMode = enabled
 }
 
 // Register subscribes this reporter to relevant events.
@@ -90,10 +96,14 @@ func (c *CLIReporter) onTestStarted(e *events.Event) {
 	}
 	c.headerShown = true
 
+	header := "Running tests"
+	if c.cloudMode {
+		header = "Running tests in Cloud"
+	}
 	if c.color {
-		fmt.Fprintf(c.out, "%sRunning tests%s\n", colorCyan, colorReset)
+		fmt.Fprintf(c.out, "%s%s%s\n", colorCyan, header, colorReset)
 	} else {
-		fmt.Fprintln(c.out, "Running tests")
+		fmt.Fprintln(c.out, header)
 	}
 }
 

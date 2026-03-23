@@ -193,6 +193,9 @@ func runTests(cmd *cobra.Command, args []string) error {
 	} else {
 		// Default mode: user-friendly progress output
 		cli := subscribers.NewCLIReporter(os.Stdout)
+		if cloudMode {
+			cli.SetCloudMode(true)
+		}
 		cli.Register(bus)
 	}
 
@@ -503,27 +506,19 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 	// Collect and upload snapshot files
 	snapshots, err := cloud.CollectSnapshotFiles(submission.Suites)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to collect snapshot files: %v\n", err)
+		return fmt.Errorf("failed to collect snapshot files: %w", err)
 	}
 	if len(snapshots) > 0 {
 		var totalSize int64
 		for _, content := range snapshots {
 			totalSize += int64(len(content))
 		}
-		emitter.Info(events.Fields{
-			"action": "cloud_upload_snapshots",
-			"count":  fmt.Sprintf("%d", len(snapshots)),
-			"msg":    fmt.Sprintf("Uploading %d snapshot file(s) (%s)...", len(snapshots), formatBytes(totalSize)),
-		})
+		fmt.Fprintf(os.Stdout, "\nUploading local snapshots (%d files, %s)\n", len(snapshots), formatBytes(totalSize))
 		uploadStart := time.Now()
 		if err := client.UploadSnapshots(resp.ID, snapshots); err != nil {
 			return fmt.Errorf("failed to upload snapshots: %w", err)
 		}
-		emitter.Info(events.Fields{
-			"action": "cloud_snapshots_uploaded",
-			"count":  fmt.Sprintf("%d", len(snapshots)),
-			"msg":    fmt.Sprintf("Uploaded %d snapshot(s) in %s", len(snapshots), time.Since(uploadStart).Round(time.Millisecond)),
-		})
+		fmt.Fprintf(os.Stdout, "  Uploaded in %s\n\n", time.Since(uploadStart).Round(time.Millisecond))
 	}
 
 	// Set up context with Ctrl+C handler

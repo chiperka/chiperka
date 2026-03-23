@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -318,6 +319,109 @@ func (c *Client) DownloadArtifactsZip(runID, outputDir string) error {
 
 		outFile.Close()
 		rc.Close()
+	}
+
+	return nil
+}
+
+// CollectSnapshotFiles walks all suites and tests, finds snapshot file references,
+// reads the files from disk, and returns a map of zipEntryPath -> fileContent.
+// The zipEntryPath preserves the relative structure so workers can reconstruct paths.
+func CollectSnapshotFiles(suites []SuiteSubmission) (map[string][]byte, error) {
+	snapshots := make(map[string][]byte)
+	seen := make(map[string]bool) // deduplicate by absolute path
+
+	for _, suite := range suites {
+		suiteDir := filepath.Dir(suite.FilePath)
+
+		for _, test := range suite.Tests {
+			for _, assertion := range test.Assertions {
+				// Collect all snapshot paths from this assertion
+				var snapshotPaths []string
+
+				if assertion.Response != nil && assertion.Response.Body != nil && assertion.Response.Body.Snapshot != "" {
+					snapshotPaths = append(snapshotPaths, assertion.Response.Body.Snapshot)
+				}
+				if assertion.CLI != nil {
+					if assertion.CLI.Stdout != nil && assertion.CLI.Stdout.Snapshot != "" {
+						snapshotPaths = append(snapshotPaths, assertion.CLI.Stdout.Snapshot)
+					}
+					if assertion.CLI.Stderr != nil && assertion.CLI.Stderr.Snapshot != "" {
+						snapshotPaths = append(snapshotPaths, assertion.CLI.Stderr.Snapshot)
+					}
+				}
+				if assertion.Artifact != nil && assertion.Artifact.Snapshot != "" {
+					snapshotPaths = append(snapshotPaths, assertion.Artifact.Snapshot)
+				}
+
+				for _, snapshotRelPath := range snapshotPaths {
+					absPath := filepath.Join(suiteDir, snapshotRelPath)
+					absPath, err := filepath.Abs(absPath)
+					if err != nil {
+						log.Printf("Warning: could not resolve snapshot path %s: %v", snapshotRelPath, err)
+						continue
+					}
+
+					if seen[absPath] {
+						continue
+					}
+					seen[absPath] = true
+
+					content, err := os.ReadFile(absPath)
+					if err != nil {
+						log.Printf("Warning: could not read snapshot file %s: %v", absPath, err)
+						continue
+					}
+
+					// Key is the path relative to CLI working directory, using forward slashes
+					zipKey := filepath.ToSlash(filepath.Join(suiteDir, snapshotRelPath))
+					snapshots[zipKey] = content
+				}
+			}
+		}
+	}
+
+	return snapshots, nil
+}
+
+// UploadSnapshots builds a zip archive from the snapshot map and uploads it to the API.
+func (c *Client) UploadSnapshots(runID string, snapshots map[string][]byte) error {
+	// Build zip in memory
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	for name, content := range snapshots {
+		fw, err := zw.Create(name)
+		if err != nil {
+			return fmt.Errorf("failed to create zip entry %s: %w", name, err)
+		}
+		if _, err := fw.Write(content); err != nil {
+			return fmt.Errorf("failed to write zip entry %s: %w", name, err)
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("failed to finalize zip: %w", err)
+	}
+
+	// Upload to API
+	endpoint := fmt.Sprintf("%s/api/runs/%s/snapshots", c.baseURL, runID)
+	req, err := http.NewRequest("POST", endpoint, &buf)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/zip")
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload snapshots: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("snapshot upload failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil

@@ -500,6 +500,22 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		"msg":    fmt.Sprintf("Run created: %s", resp.ID),
 	})
 
+	// Collect and upload snapshot files
+	snapshots, err := cloud.CollectSnapshotFiles(submission.Suites)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to collect snapshot files: %v\n", err)
+	}
+	if len(snapshots) > 0 {
+		emitter.Info(events.Fields{
+			"action": "cloud_upload_snapshots",
+			"count":  fmt.Sprintf("%d", len(snapshots)),
+			"msg":    fmt.Sprintf("Uploading %d snapshot file(s)...", len(snapshots)),
+		})
+		if err := client.UploadSnapshots(resp.ID, snapshots); err != nil {
+			return fmt.Errorf("failed to upload snapshots: %w", err)
+		}
+	}
+
 	// Set up context with Ctrl+C handler
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

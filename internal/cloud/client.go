@@ -451,9 +451,19 @@ func BuildSubmission(tests *model.TestCollection, services *model.ServiceTemplat
 			resolvedTests[i].Services = resolvedServices
 		}
 
+		// Normalize FilePath to relative (prevents absolute paths in zip keys and DB)
+		filePath := suite.FilePath
+		if filepath.IsAbs(filePath) {
+			if cwd, err := os.Getwd(); err == nil {
+				if rel, err := filepath.Rel(cwd, filePath); err == nil {
+					filePath = rel
+				}
+			}
+		}
+
 		req.Suites = append(req.Suites, SuiteSubmission{
 			Name:     suite.Name,
-			FilePath: suite.FilePath,
+			FilePath: filePath,
 			Tests:    resolvedTests,
 		})
 	}

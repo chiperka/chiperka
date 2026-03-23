@@ -506,14 +506,24 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		fmt.Fprintf(os.Stderr, "Warning: failed to collect snapshot files: %v\n", err)
 	}
 	if len(snapshots) > 0 {
+		var totalSize int64
+		for _, content := range snapshots {
+			totalSize += int64(len(content))
+		}
 		emitter.Info(events.Fields{
 			"action": "cloud_upload_snapshots",
 			"count":  fmt.Sprintf("%d", len(snapshots)),
-			"msg":    fmt.Sprintf("Uploading %d snapshot file(s)...", len(snapshots)),
+			"msg":    fmt.Sprintf("Uploading %d snapshot file(s) (%s)...", len(snapshots), formatBytes(totalSize)),
 		})
+		uploadStart := time.Now()
 		if err := client.UploadSnapshots(resp.ID, snapshots); err != nil {
 			return fmt.Errorf("failed to upload snapshots: %w", err)
 		}
+		emitter.Info(events.Fields{
+			"action": "cloud_snapshots_uploaded",
+			"count":  fmt.Sprintf("%d", len(snapshots)),
+			"msg":    fmt.Sprintf("Uploaded %d snapshot(s) in %s", len(snapshots), time.Since(uploadStart).Round(time.Millisecond)),
+		})
 	}
 
 	// Set up context with Ctrl+C handler
@@ -617,4 +627,17 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 	}
 
 	return nil
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMG"[exp])
 }

@@ -142,7 +142,7 @@ func TestClient_BuildSubmission_Basic(t *testing.T) {
 
 	services := model.NewServiceTemplateCollection()
 
-	req, err := BuildSubmission(tests, services, "1.0.0")
+	req, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestClient_BuildSubmission_ResolvesServiceRefs(t *testing.T) {
 		Image: "postgres:15",
 	})
 
-	req, err := BuildSubmission(tests, services, "")
+	req, err := BuildSubmission(tests, services, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestClient_BuildSubmission_UnresolvedRef(t *testing.T) {
 
 	services := model.NewServiceTemplateCollection()
 
-	_, err := BuildSubmission(tests, services, "")
+	_, err := BuildSubmission(tests, services, "", nil)
 	if err == nil {
 		t.Errorf("expected error for unresolved service ref")
 	}
@@ -212,7 +212,7 @@ func TestClient_BuildSubmission_Empty(t *testing.T) {
 	tests := model.NewTestCollection()
 	services := model.NewServiceTemplateCollection()
 
-	req, err := BuildSubmission(tests, services, "")
+	req, err := BuildSubmission(tests, services, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

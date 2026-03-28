@@ -32,10 +32,17 @@ type ServiceConfig struct {
 	MaxInstances int                     `yaml:"maxInstances,omitempty"`
 }
 
+// CloudConfig defines cloud-related configuration in spark.yaml.
+type CloudConfig struct {
+	URL     string `yaml:"url,omitempty"`
+	Project string `yaml:"project,omitempty"` // project slug
+}
+
 // Config represents the contents of a spark.yaml configuration file.
 type Config struct {
 	Services           map[string]ServiceConfig `yaml:"services"`
 	ExecutionVariables map[string]string        `yaml:"executionVariables"`
+	Cloud              CloudConfig              `yaml:"cloud,omitempty"`
 }
 
 // Load reads a configuration file from the given path.

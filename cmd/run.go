@@ -41,6 +41,7 @@ var teamcityOutput bool
 var jsonOutput bool
 var pathMapping string
 var configFile string
+var cloudProject string
 
 var runCmd = &cobra.Command{
 	Use:   "run [path]",
@@ -80,8 +81,8 @@ Example:
   spark run ./tests --configuration spark.yaml
   spark run ./tests --env-file .env
   spark run ./tests --env-file .env --env-file .env.local
-  spark run ./tests --cloud
-  SPARK_CLOUD_URL=http://localhost:8080 spark run ./tests --cloud`,
+  spark run ./tests --cloud                    # uses cloud.url from spark.yaml
+  SPARK_CLOUD_URL=http://ci.example.com spark run ./tests --cloud  # env override for CI/CD`,
 	Args:          cobra.MaximumNArgs(1),
 	SilenceUsage:  true, // Don't print usage on error - it's confusing in CI logs
 	SilenceErrors: true,
@@ -100,12 +101,13 @@ func init() {
 	runCmd.Flags().BoolVar(&debugOutput, "debug", false, "Show docker commands (implies --verbose)")
 	runCmd.Flags().IntVar(&testTimeout, "timeout", 300, "Maximum time in seconds for each test execution")
 	runCmd.Flags().IntVar(&workerCount, "workers", 0, "Number of parallel test workers (0 = auto-detect from CPU count)")
-	runCmd.Flags().BoolVar(&cloudMode, "cloud", false, "Run tests on remote API server (default: https://spark-cloud.finie.io, override with SPARK_CLOUD_URL)")
+	runCmd.Flags().BoolVar(&cloudMode, "cloud", false, "Run tests on remote cloud server (configured via spark.yaml cloud.url or SPARK_CLOUD_URL env)")
 	runCmd.Flags().Float64Var(&cpuThreshold, "cpu-threshold", 0, "CPU load threshold (0.0-1.0) - pause test execution when exceeded (0 = disabled)")
 	runCmd.Flags().BoolVar(&teamcityOutput, "teamcity", false, "Output TeamCity service messages for IDE integration")
 	runCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output NDJSON for machine consumption")
 	runCmd.Flags().StringVar(&pathMapping, "path-mapping", "", "Path prefix mapping for artifact paths (container=host, e.g. /srv/spark=/Users/me/project)")
 	runCmd.Flags().StringVar(&configFile, "configuration", "", "Path to spark.yaml configuration file (auto-discovered if not set)")
+	runCmd.Flags().StringVar(&cloudProject, "project", "", "Project slug for cloud runs (env: SPARK_PROJECT, config: cloud.project)")
 }
 
 // runTests is the main entry point for the run command.
@@ -257,16 +259,32 @@ func runTests(cmd *cobra.Command, args []string) error {
 
 	// Cloud mode: upload tests to remote API and stream results
 	if cloudMode {
-		cloudURL := os.Getenv("SPARK_CLOUD_URL")
+		// Resolve cloud URL: spark.yaml > SPARK_CLOUD_URL env
+		cloudURL := ""
+		if cfg != nil && cfg.Cloud.URL != "" {
+			cloudURL = cfg.Cloud.URL
+		}
+		if envURL := os.Getenv("SPARK_CLOUD_URL"); envURL != "" {
+			cloudURL = envURL // env overrides config
+		}
 		if cloudURL == "" {
-			cloudURL = "https://spark-cloud.finie.io"
+			fmt.Fprintln(os.Stderr, "Error: cloud URL not configured. Set 'cloud.url' in spark.yaml or SPARK_CLOUD_URL environment variable.")
+			os.Exit(1)
 		}
 		// Only download artifacts if --artifacts was explicitly set
 		cloudArtifactsDir := ""
 		if cmd.Flags().Changed("artifacts") {
 			cloudArtifactsDir = artifactsDir
 		}
-		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter, cloudArtifactsDir)
+		// Resolve project slug: --project flag > SPARK_PROJECT env > spark.yaml cloud.project
+		projectSlug := cloudProject
+		if projectSlug == "" {
+			projectSlug = os.Getenv("SPARK_PROJECT")
+		}
+		if projectSlug == "" {
+			projectSlug = cfg.Cloud.Project
+		}
+		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter, cloudArtifactsDir, projectSlug)
 		telemetry.Wait(4 * time.Second)
 		return err // runTestsCloud already wraps with ExitError
 	}
@@ -468,7 +486,7 @@ func resolveCloudToken(apiURL string) string {
 }
 
 // runTestsCloud uploads tests to a remote API server and streams results.
-func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter, artifactsDir string) error {
+func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter, artifactsDir string, projectSlug string) error {
 	token := resolveCloudToken(apiURL)
 	client := cloud.NewClient(apiURL, token)
 
@@ -478,8 +496,24 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		return fmt.Errorf("cloud API not reachable at %s: %w\n\nHint: run without --cloud for local execution", apiURL, err)
 	}
 
+	// Resolve project slug to ID if specified
+	var projectID *int64
+	if projectSlug != "" {
+		id, err := client.ResolveProject(projectSlug)
+		if err != nil {
+			return fmt.Errorf("failed to resolve project %q: %w", projectSlug, err)
+		}
+		projectID = &id
+		emitter.Info(events.Fields{
+			"action":  "project_resolve",
+			"slug":    projectSlug,
+			"project": fmt.Sprintf("%d", id),
+			"msg":     fmt.Sprintf("Resolved project %q (ID: %d)", projectSlug, id),
+		})
+	}
+
 	// Build submission with resolved service templates
-	submission, err := cloud.BuildSubmission(tests, services, Version)
+	submission, err := cloud.BuildSubmission(tests, services, Version, projectID)
 	if err != nil {
 		telemetry.RecordError(Version, telemetry.ClassifyError(err))
 		return fmt.Errorf("failed to build submission: %w", err)

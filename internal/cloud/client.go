@@ -66,8 +66,9 @@ func (c *Client) HealthCheck() error {
 
 // CreateRunRequest is the payload for creating a run.
 type CreateRunRequest struct {
-	Suites []SuiteSubmission `json:"suites"`
-	Config *RunConfig        `json:"config,omitempty"`
+	Suites    []SuiteSubmission `json:"suites"`
+	Config    *RunConfig        `json:"config,omitempty"`
+	ProjectID *int64            `json:"project_id,omitempty"`
 }
 
 // SuiteSubmission represents a pre-parsed suite.
@@ -424,12 +425,41 @@ func (c *Client) UploadSnapshots(runID string, snapshots map[string][]byte) erro
 	return nil
 }
 
+// ResolveProject resolves a project slug to its numeric ID.
+func (c *Client) ResolveProject(slug string) (int64, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/api/projects/resolve?slug="+slug, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create project resolve request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve project: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("project %q not found (API returned %d: %s)", slug, resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("failed to decode project response: %w", err)
+	}
+	return result.ID, nil
+}
+
 // BuildSubmission converts a TestCollection into a CreateRunRequest.
-func BuildSubmission(tests *model.TestCollection, services *model.ServiceTemplateCollection, version string) (*CreateRunRequest, error) {
+func BuildSubmission(tests *model.TestCollection, services *model.ServiceTemplateCollection, version string, projectID *int64) (*CreateRunRequest, error) {
 	req := &CreateRunRequest{
 		Config: &RunConfig{
 			Version: version,
 		},
+		ProjectID: projectID,
 	}
 
 	for _, suite := range tests.Suites {

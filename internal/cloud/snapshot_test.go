@@ -491,7 +491,7 @@ func TestSnapshotPathConsistency_AfterBuildSubmission(t *testing.T) {
 	services := model.NewServiceTemplateCollection()
 
 	// BuildSubmission normalizes to relative path
-	submission, err := BuildSubmission(tests, services, "1.0.0")
+	submission, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("BuildSubmission error: %v", err)
 	}
@@ -672,7 +672,7 @@ func TestBuildSubmission_NormalizesFilePath(t *testing.T) {
 	})
 
 	services := model.NewServiceTemplateCollection()
-	req, err := BuildSubmission(tests, services, "1.0.0")
+	req, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -697,7 +697,7 @@ func TestBuildSubmission_NormalizesAbsolutePath(t *testing.T) {
 	})
 
 	services := model.NewServiceTemplateCollection()
-	req, err := BuildSubmission(tests, services, "1.0.0")
+	req, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -934,7 +934,7 @@ func TestBuildSubmission_PreservesVersion(t *testing.T) {
 	})
 
 	services := model.NewServiceTemplateCollection()
-	req, err := BuildSubmission(tests, services, "2.5.0")
+	req, err := BuildSubmission(tests, services, "2.5.0", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -958,7 +958,7 @@ func TestBuildSubmission_MultipleSuites(t *testing.T) {
 	})
 
 	services := model.NewServiceTemplateCollection()
-	req, err := BuildSubmission(tests, services, "1.0.0")
+	req, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1021,7 +1021,7 @@ func TestRunGoFlow_BuildSubmissionThenCollectSnapshots(t *testing.T) {
 	services := model.NewServiceTemplateCollection()
 
 	// Step 2: BuildSubmission normalizes to relative
-	submission, err := BuildSubmission(tests, services, "1.0.0")
+	submission, err := BuildSubmission(tests, services, "1.0.0", nil)
 	if err != nil {
 		t.Fatalf("BuildSubmission error: %v", err)
 	}

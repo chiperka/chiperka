@@ -264,8 +264,7 @@ func (c *Client) DownloadArtifactsZip(runID, outputDir string) error {
 	}
 	c.setAuth(req)
 
-	downloadClient := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := downloadClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download artifacts: %w", err)
 	}

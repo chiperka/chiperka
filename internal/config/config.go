@@ -30,6 +30,7 @@ type ServiceConfig struct {
 	HealthCheck  *model.HealthCheck      `yaml:"healthcheck,omitempty"`
 	Artifacts    []model.ServiceArtifact `yaml:"artifacts,omitempty"`
 	MaxInstances int                     `yaml:"maxInstances,omitempty"`
+	Hooks        []model.Hook            `yaml:"hooks,omitempty"`
 }
 
 // CloudConfig defines cloud-related configuration in spark.yaml.
@@ -96,6 +97,7 @@ func (c *Config) ServiceTemplates() *model.ServiceTemplateCollection {
 			HealthCheck:  svc.HealthCheck,
 			Artifacts:    svc.Artifacts,
 			MaxInstances: svc.MaxInstances,
+			Hooks:        svc.Hooks,
 		}
 		collection.AddTemplate(template)
 	}

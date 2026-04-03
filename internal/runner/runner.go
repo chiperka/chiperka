@@ -672,6 +672,18 @@ func (r *Runner) runTestWithServices(ctx context.Context, test model.Test, uuid 
 		}
 	}
 
+	// --- beforeExecution hooks ---
+	beforeHooks := test.CollectHooks("beforeExecution")
+	if len(beforeHooks) > 0 {
+		if err := r.executeHooks(ctx, test, dockerManager, uuid, beforeHooks); err != nil {
+			result.Status = model.StatusError
+			result.Error = fmt.Errorf("beforeExecution hook failed: %w", err)
+			result.ServicesDuration = servicesDuration
+			result.SetupDuration = setupDuration
+			return result
+		}
+	}
+
 	// Execute the actual test (execution + teardown + assertions)
 	// Teardown callback runs after execution but before assertions
 	var teardownFn func() ([]model.SetupResult, []model.HTTPExchangeResult, []model.CLIExecutionResult, error)
@@ -697,6 +709,110 @@ func (r *Runner) runTestWithServices(ctx context.Context, test model.Test, uuid 
 }
 
 // executeSetup executes all setup instructions for a test.
+// executeHooks runs service hooks (CLI commands or diff transforms) for a given slot.
+func (r *Runner) executeHooks(ctx context.Context, test model.Test, dockerManager *docker.Manager, uuid string, hooks []model.Hook) error {
+	for _, hook := range hooks {
+		if hook.CLI != nil {
+			r.emit(ctx).Info(events.Fields{
+				"test":    test.Name,
+				"action":  "hook",
+				"service": hook.ServiceName,
+				"msg":     fmt.Sprintf("Running %s hook: %s", hook.Slot, hook.CLI.Command),
+			})
+			_, err := dockerManager.ExecInContainer(ctx, hook.ServiceName, hook.CLI.Command, hook.CLI.WorkingDir, nil)
+			if err != nil {
+				return fmt.Errorf("hook %s (service %s) failed: %w", hook.Slot, hook.ServiceName, err)
+			}
+		}
+		if hook.Diff != nil {
+			r.emit(ctx).Info(events.Fields{
+				"test":   test.Name,
+				"action": "hook_diff",
+				"msg":    fmt.Sprintf("Computing diff: %s vs %s → %s", hook.Diff.Source, hook.Diff.Target, hook.Diff.Output),
+			})
+			if err := r.executeDiffHook(uuid, hook.Diff); err != nil {
+				r.emit(ctx).Warn(events.Fields{
+					"test": test.Name,
+					"msg":  fmt.Sprintf("Diff hook failed: %v", err),
+				})
+				// Diff hooks are always optional - don't fail the test
+			}
+		}
+	}
+	return nil
+}
+
+// executeDiffHook computes a unified diff between two collected artifacts.
+func (r *Runner) executeDiffHook(uuid string, diff *model.HookDiff) error {
+	artifacts, err := r.collector.ListArtifacts(uuid)
+	if err != nil {
+		return fmt.Errorf("failed to list artifacts: %w", err)
+	}
+
+	var sourcePath, targetPath string
+	for _, a := range artifacts {
+		base := filepath.Base(a.Name)
+		if a.Name == diff.Source || base == diff.Source {
+			sourcePath = a.Path
+		}
+		if a.Name == diff.Target || base == diff.Target {
+			targetPath = a.Path
+		}
+	}
+	if sourcePath == "" || targetPath == "" {
+		return fmt.Errorf("artifacts not found: source=%q target=%q", diff.Source, diff.Target)
+	}
+
+	sourceContent, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to read source: %w", err)
+	}
+	targetContent, err := os.ReadFile(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to read target: %w", err)
+	}
+
+	// Simple line diff
+	diffContent := computeSimpleDiff(diff.Source, diff.Target, string(sourceContent), string(targetContent))
+
+	// Save as artifact
+	_, err = r.collector.SaveArtifact(uuid, diff.Output, []byte(diffContent))
+	return err
+}
+
+// computeSimpleDiff produces a basic unified diff header with changed lines.
+func computeSimpleDiff(nameA, nameB, a, b string) string {
+	linesA := strings.Split(a, "\n")
+	linesB := strings.Split(b, "\n")
+
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("--- %s\n+++ %s\n", nameA, nameB))
+
+	maxLen := len(linesA)
+	if len(linesB) > maxLen {
+		maxLen = len(linesB)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		la, lb := "", ""
+		if i < len(linesA) {
+			la = linesA[i]
+		}
+		if i < len(linesB) {
+			lb = linesB[i]
+		}
+		if la != lb {
+			if i < len(linesA) {
+				buf.WriteString("-" + la + "\n")
+			}
+			if i < len(linesB) {
+				buf.WriteString("+" + lb + "\n")
+			}
+		}
+	}
+	return buf.String()
+}
+
 func (r *Runner) executeSetup(ctx context.Context, test model.Test, dockerManager *docker.Manager, uuid string, suiteFilePath string) ([]model.SetupResult, []model.HTTPExchangeResult, []model.CLIExecutionResult, error) {
 	var results []model.SetupResult
 	var httpExchanges []model.HTTPExchangeResult
@@ -1130,6 +1246,12 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
 		}
 
+		// --- afterExecution hooks (diff, etc.) ---
+		afterHooks := test.CollectHooks("afterExecution")
+		if len(afterHooks) > 0 {
+			r.executeHooks(ctx, test, dockerManager, uuid, afterHooks)
+		}
+
 		// Build artifact info list
 		var artifactInfos []assertion.ArtifactInfo
 		if collectedArtifacts, err := r.collector.ListArtifacts(uuid); err == nil {
@@ -1264,6 +1386,12 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		// Collect service artifacts before assertion evaluation (containers still running)
 		if dockerManager != nil {
 			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
+		}
+
+		// --- afterExecution hooks (diff, etc.) ---
+		afterHooks := test.CollectHooks("afterExecution")
+		if len(afterHooks) > 0 {
+			r.executeHooks(ctx, test, dockerManager, uuid, afterHooks)
 		}
 
 		// Build artifact info list

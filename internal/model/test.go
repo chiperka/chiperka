@@ -351,6 +351,28 @@ func (hc *HealthCheck) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// Hook defines an action that runs at a specific point in the test lifecycle.
+type Hook struct {
+	Slot        string    `yaml:"slot" json:"slot"`
+	Priority    int       `yaml:"priority,omitempty" json:"priority,omitempty"`
+	CLI         *HookCLI  `yaml:"cli,omitempty" json:"cli,omitempty"`
+	Diff        *HookDiff `yaml:"diff,omitempty" json:"diff,omitempty"`
+	ServiceName string    `yaml:"-" json:"service_name,omitempty"`
+}
+
+// HookCLI runs a command inside a service container.
+type HookCLI struct {
+	Command    string `yaml:"command" json:"command"`
+	WorkingDir string `yaml:"workingDir,omitempty" json:"working_dir,omitempty"`
+}
+
+// HookDiff computes a unified diff between two artifact files.
+type HookDiff struct {
+	Source string `yaml:"source" json:"source"`
+	Target string `yaml:"target" json:"target"`
+	Output string `yaml:"output" json:"output"`
+}
+
 // ServiceArtifact defines an external artifact to collect from a service container.
 type ServiceArtifact struct {
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
@@ -377,6 +399,8 @@ type Service struct {
 	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	// Artifacts to collect from the container after test execution
 	Artifacts []ServiceArtifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	// Hooks inherited from service template
+	Hooks []Hook `yaml:"-" json:"hooks,omitempty"`
 }
 
 // ServiceTemplate defines a reusable service configuration.
@@ -399,6 +423,8 @@ type ServiceTemplate struct {
 	Artifacts []ServiceArtifact `yaml:"artifacts,omitempty"`
 	// MaxInstances limits concurrent running instances of this service template (0 = unlimited)
 	MaxInstances int `yaml:"maxInstances,omitempty"`
+	// Hooks define actions at specific points in the test lifecycle
+	Hooks []Hook `yaml:"hooks,omitempty"`
 	// FilePath stores the source file path (not from YAML, set by parser)
 	FilePath string `yaml:"-"`
 }
@@ -453,6 +479,7 @@ func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error)
 		WorkingDir:  template.WorkingDir,
 		HealthCheck: template.HealthCheck,
 		Artifacts:   append([]ServiceArtifact{}, template.Artifacts...),
+		Hooks:       append([]Hook{}, template.Hooks...),
 	}
 
 	// Copy environment from template
@@ -591,6 +618,27 @@ type Test struct {
 	Execution   Execution          `yaml:"execution" json:"execution"`
 	Assertions  []Assertion        `yaml:"assertions" json:"assertions"`
 	Teardown    []SetupInstruction `yaml:"teardown,omitempty" json:"teardown,omitempty"`
+}
+
+// CollectHooks gathers all hooks from test services for a given slot, sorted by priority.
+func (t *Test) CollectHooks(slot string) []Hook {
+	var hooks []Hook
+	for _, svc := range t.Services {
+		for _, h := range svc.Hooks {
+			if h.Slot == slot {
+				hook := h
+				hook.ServiceName = svc.Name
+				hooks = append(hooks, hook)
+			}
+		}
+	}
+	sort.Slice(hooks, func(i, j int) bool {
+		pi, pj := hooks[i].Priority, hooks[j].Priority
+		if pi == 0 { pi = 50 }
+		if pj == 0 { pj = 50 }
+		return pi < pj
+	})
+	return hooks
 }
 
 // Suite represents a collection of tests from a single spark.yaml file.

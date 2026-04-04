@@ -1241,15 +1241,24 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		// Run teardown before assertions
 		runTeardown()
 
-		// Collect service artifacts before assertion evaluation (containers still running)
+		// afterExecution CLI hooks — run BEFORE artifact collection (they write files into containers)
+		afterHooks := test.CollectHooks("afterExecution")
+		for _, h := range afterHooks {
+			if h.CLI != nil {
+				r.executeHooks(ctx, test, dockerManager, uuid, []model.Hook{h})
+			}
+		}
+
+		// Collect service artifacts (containers still running)
 		if dockerManager != nil {
 			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
 		}
 
-		// --- afterExecution hooks (diff, etc.) ---
-		afterHooks := test.CollectHooks("afterExecution")
-		if len(afterHooks) > 0 {
-			r.executeHooks(ctx, test, dockerManager, uuid, afterHooks)
+		// afterExecution diff hooks — run AFTER artifact collection (read files from disk)
+		for _, h := range afterHooks {
+			if h.Diff != nil {
+				r.executeHooks(ctx, test, dockerManager, uuid, []model.Hook{h})
+			}
 		}
 
 		// Build artifact info list
@@ -1383,15 +1392,24 @@ func (r *Runner) runTestExecution(ctx context.Context, test model.Test, dockerMa
 		// Run teardown before assertions
 		runTeardown()
 
-		// Collect service artifacts before assertion evaluation (containers still running)
+		// afterExecution CLI hooks — run BEFORE artifact collection (they write files into containers)
+		afterHooks := test.CollectHooks("afterExecution")
+		for _, h := range afterHooks {
+			if h.CLI != nil {
+				r.executeHooks(ctx, test, dockerManager, uuid, []model.Hook{h})
+			}
+		}
+
+		// Collect service artifacts (containers still running)
 		if dockerManager != nil {
 			dockerManager.CollectServiceArtifacts(ctx, r.collector, uuid)
 		}
 
-		// --- afterExecution hooks (diff, etc.) ---
-		afterHooks := test.CollectHooks("afterExecution")
-		if len(afterHooks) > 0 {
-			r.executeHooks(ctx, test, dockerManager, uuid, afterHooks)
+		// afterExecution diff hooks — run AFTER artifact collection (read files from disk)
+		for _, h := range afterHooks {
+			if h.Diff != nil {
+				r.executeHooks(ctx, test, dockerManager, uuid, []model.Hook{h})
+			}
 		}
 
 		// Build artifact info list

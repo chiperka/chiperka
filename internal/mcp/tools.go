@@ -108,6 +108,9 @@ func runTool() mcp.Tool {
 		mcp.WithBoolean("regenerate_snapshots",
 			mcp.Description("Update snapshot files instead of comparing them"),
 		),
+		mcp.WithNumber("workers",
+			mcp.Description("Number of parallel test workers (0 or omit = auto-detect from CPU count)"),
+		),
 	)
 }
 
@@ -511,6 +514,10 @@ func handleRun(version string) func(ctx context.Context, request mcp.CallToolReq
 			timeout = int(t)
 		}
 		regenerateSnapshots, _ := request.GetArguments()["regenerate_snapshots"].(bool)
+		requestedWorkers := 0
+		if w, ok := request.GetArguments()["workers"].(float64); ok && w > 0 {
+			requestedWorkers = int(w)
+		}
 
 		cfg, err := loadConfig(configFile)
 		if err != nil {
@@ -539,9 +546,12 @@ func handleRun(version string) func(ctx context.Context, request mcp.CallToolReq
 		collector := subscribers.NewEventCollector()
 		collector.Register(bus)
 
-		workerCount := runtime.NumCPU()
-		if workerCount < 1 {
-			workerCount = 1
+		workerCount := requestedWorkers
+		if workerCount <= 0 {
+			workerCount = runtime.NumCPU()
+			if workerCount < 1 {
+				workerCount = 1
+			}
 		}
 
 		r, err := runner.New(bus, workerCount, os.TempDir(), services, regenerateSnapshots, timeout, version, collector, 0, cfg.ExecutionVariables)

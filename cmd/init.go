@@ -3,10 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"chiperka-cli/internal/telemetry"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -125,6 +126,22 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write tests/api.chiperka: %w", err)
 	}
 
+	// Add .chiperka/results/ to .gitignore if it exists
+	if _, err := os.Stat(".gitignore"); err == nil {
+		content, err := os.ReadFile(".gitignore")
+		if err == nil && !containsLine(string(content), ".chiperka/results/") {
+			f, err := os.OpenFile(".gitignore", os.O_APPEND|os.O_WRONLY, 0644)
+			if err == nil {
+				if len(content) > 0 && content[len(content)-1] != '\n' {
+					f.Write([]byte("\n"))
+				}
+				f.Write([]byte(".chiperka/results/\n"))
+				f.Close()
+				fmt.Println("Added .chiperka/results/ to .gitignore")
+			}
+		}
+	}
+
 	fmt.Println("Created chiperka.yaml")
 	fmt.Println("Created tests/health.chiperka")
 	fmt.Println("Created tests/api.chiperka")
@@ -132,4 +149,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println("Run your tests with: chiperka run tests")
 
 	return nil
+}
+
+func containsLine(content, line string) bool {
+	for _, l := range strings.Split(content, "\n") {
+		if strings.TrimSpace(l) == line {
+			return true
+		}
+	}
+	return false
 }

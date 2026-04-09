@@ -18,11 +18,11 @@ var initCmd = &cobra.Command{
 	Long: `Init scaffolds a starter Chiperka project in the current directory.
 
 It creates:
-  - chiperka.yaml       Configuration with an example service template
-  - tests/health.chiperka  Health check test (1 test case)
-  - tests/api.chiperka     API tests (2 test cases)
+  - .chiperka/chiperka.yaml  Configuration with an example service template
+  - tests/health.chiperka    Health check test (1 test case)
+  - tests/api.chiperka       API tests (2 test cases)
 
-If chiperka.yaml already exists, init exits without modifying anything.
+If .chiperka/chiperka.yaml already exists, init exits without modifying anything.
 
 Example:
   mkdir my-project && cd my-project
@@ -100,20 +100,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 		telemetry.Wait(2 * time.Second)
 	}()
 
-	// Check if chiperka.yaml already exists
-	if _, err := os.Stat("chiperka.yaml"); err == nil {
-		fmt.Println("chiperka.yaml already exists, skipping initialization")
+	configPath := filepath.Join(".chiperka", "chiperka.yaml")
+
+	// Check if config already exists
+	if _, err := os.Stat(configPath); err == nil {
+		fmt.Println(".chiperka/chiperka.yaml already exists, skipping initialization")
 		return nil
 	}
 
-	// Create tests directory
+	// Create directories
+	if err := os.MkdirAll(".chiperka", 0755); err != nil {
+		return fmt.Errorf("failed to create .chiperka directory: %w", err)
+	}
 	if err := os.MkdirAll("tests", 0755); err != nil {
 		return fmt.Errorf("failed to create tests directory: %w", err)
 	}
 
-	// Write chiperka.yaml
-	if err := os.WriteFile("chiperka.yaml", []byte(chiperkaYAMLContent), 0644); err != nil {
-		return fmt.Errorf("failed to write chiperka.yaml: %w", err)
+	// Write .chiperka/chiperka.yaml
+	if err := os.WriteFile(configPath, []byte(chiperkaYAMLContent), 0644); err != nil {
+		return fmt.Errorf("failed to write .chiperka/chiperka.yaml: %w", err)
 	}
 
 	// Write tests/health.chiperka
@@ -142,7 +147,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("Created chiperka.yaml")
+	fmt.Println("Created .chiperka/chiperka.yaml")
 	fmt.Println("Created tests/health.chiperka")
 	fmt.Println("Created tests/api.chiperka")
 	fmt.Println()

@@ -59,8 +59,8 @@ Use --tags to run only tests with specific tags. Multiple tags can be specified
 Use --filter to run only tests whose name matches the pattern. Supports glob patterns
 with * wildcard. Without wildcards, performs substring match.
 
-Use --configuration to specify a chiperka.yaml configuration file with shared service
-definitions. If not specified, chiperka.yaml/chiperka.yml is auto-discovered in the
+Use --configuration to specify a configuration file with shared service
+definitions. If not specified, .chiperka/chiperka.yaml is auto-discovered in the
 current working directory.
 
 Output modes:
@@ -79,10 +79,10 @@ Example:
   chiperka run ./tests --tags smoke --filter "user*"
   chiperka run ./tests --verbose
   chiperka run ./tests --debug
-  chiperka run ./tests --configuration chiperka.yaml
+  chiperka run ./tests --configuration .chiperka/chiperka.yaml
   chiperka run ./tests --env-file .env
   chiperka run ./tests --env-file .env --env-file .env.local
-  chiperka run ./tests --cloud                    # uses cloud.url from chiperka.yaml
+  chiperka run ./tests --cloud                    # uses cloud.url from .chiperka/chiperka.yaml
   CHIPERKA_CLOUD_URL=http://ci.example.com chiperka run ./tests --cloud  # env override for CI/CD`,
 	Args:          cobra.MaximumNArgs(1),
 	SilenceUsage:  true, // Don't print usage on error - it's confusing in CI logs
@@ -270,7 +270,7 @@ func runTests(cmd *cobra.Command, args []string) error {
 			cloudURL = envURL // env overrides config
 		}
 		if cloudURL == "" {
-			fmt.Fprintln(os.Stderr, "Error: cloud URL not configured. Set 'cloud.url' in chiperka.yaml or CHIPERKA_CLOUD_URL environment variable.")
+			fmt.Fprintln(os.Stderr, "Error: cloud URL not configured. Set 'cloud.url' in .chiperka/chiperka.yaml or CHIPERKA_CLOUD_URL environment variable.")
 			os.Exit(1)
 		}
 		// Resolve project slug: --project flag > CHIPERKA_PROJECT env > chiperka.yaml cloud.project

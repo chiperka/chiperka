@@ -116,10 +116,10 @@ tests:
             url: /cleanup
 ` + "```" + `
 
-## Configuration (chiperka.yaml)
+## Configuration (.chiperka/chiperka.yaml)
 
 Defines reusable service templates referenced via ` + "`" + `ref:` + "`" + ` in test files.
-Auto-discovered in working directory, or set with --configuration.
+Auto-discovered in .chiperka/ directory, or set with --configuration.
 
 ` + "```" + `yaml
 services:

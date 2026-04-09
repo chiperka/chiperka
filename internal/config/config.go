@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 
 	"gopkg.in/yaml.v3"
@@ -64,10 +65,13 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Discover looks for chiperka.yaml or chiperka.yml in the current working directory.
+// Discover looks for .chiperka/chiperka.yaml or .chiperka/chiperka.yml in the current working directory.
 // Returns the config and true if found, or an empty config and false if not found.
 func Discover() (*Config, bool) {
-	for _, name := range []string{"chiperka.yaml", "chiperka.yml"} {
+	for _, name := range []string{
+		filepath.Join(".chiperka", "chiperka.yaml"),
+		filepath.Join(".chiperka", "chiperka.yml"),
+	} {
 		if _, err := os.Stat(name); err == nil {
 			cfg, err := Load(name)
 			if err != nil {

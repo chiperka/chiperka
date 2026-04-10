@@ -34,7 +34,7 @@ waits for healthchecks, executes HTTP or CLI commands, and evaluates assertions.
 
 ## Commands
 
-### chiperka run [path]
+### chiperka test [path]
 Run tests. Exit codes: 0=passed, 1=assertion failures, 2=infrastructure errors.
 
 Key flags:
@@ -132,7 +132,7 @@ services:
       POSTGRES_PASSWORD: test
 ` + "```" + `
 
-## JSON output format (chiperka run --json)
+## JSON output format (chiperka test --json)
 
 NDJSON — one JSON object per line:
 

@@ -44,10 +44,11 @@ var pathMapping string
 var configFile string
 var cloudProject string
 
-var runCmd = &cobra.Command{
-	Use:   "run [path]",
-	Short: "Run tests from chiperka.yaml files",
-	Long: `Run discovers and executes tests defined in *.chiperka files.
+var testCmd = &cobra.Command{
+	Use:     "test [path]",
+	Aliases: []string{"run"}, // Backward compat: `chiperka run` still works
+	Short:   "Run tests from .chiperka files",
+	Long: `Test discovers and executes tests defined in *.chiperka files.
 
 The command walks through the specified directory (or current directory if not specified)
 and finds all files matching the *.chiperka pattern. You can also specify a single
@@ -68,22 +69,22 @@ Output modes:
   --debug      Show docker commands being executed (implies --verbose)
 
 Example:
-  chiperka run ./tests
-  chiperka run ./tests/auth.chiperka
-  chiperka run .
-  chiperka run
-  chiperka run ./tests --tags smoke
-  chiperka run ./tests --tags smoke,api
-  chiperka run ./tests --filter "login*"
-  chiperka run ./tests --filter "*authentication*"
-  chiperka run ./tests --tags smoke --filter "user*"
-  chiperka run ./tests --verbose
-  chiperka run ./tests --debug
-  chiperka run ./tests --configuration .chiperka/chiperka.yaml
-  chiperka run ./tests --env-file .env
-  chiperka run ./tests --env-file .env --env-file .env.local
-  chiperka run ./tests --cloud                    # uses cloud.url from .chiperka/chiperka.yaml
-  CHIPERKA_CLOUD_URL=http://ci.example.com chiperka run ./tests --cloud  # env override for CI/CD`,
+  chiperka test ./tests
+  chiperka test ./tests/auth.chiperka
+  chiperka test .
+  chiperka test
+  chiperka test ./tests --tags smoke
+  chiperka test ./tests --tags smoke,api
+  chiperka test ./tests --filter "login*"
+  chiperka test ./tests --filter "*authentication*"
+  chiperka test ./tests --tags smoke --filter "user*"
+  chiperka test ./tests --verbose
+  chiperka test ./tests --debug
+  chiperka test ./tests --configuration .chiperka/chiperka.yaml
+  chiperka test ./tests --env-file .env
+  chiperka test ./tests --env-file .env --env-file .env.local
+
+The legacy command name "run" is still accepted as an alias.`,
 	Args:          cobra.MaximumNArgs(1),
 	SilenceUsage:  true, // Don't print usage on error - it's confusing in CI logs
 	SilenceErrors: true,
@@ -91,26 +92,26 @@ Example:
 }
 
 func init() {
-	rootCmd.AddCommand(runCmd)
-	runCmd.Flags().StringVar(&junitOutput, "junit", "", "Write JUnit XML report to file")
-	runCmd.Flags().StringVar(&htmlOutput, "html", "", "Write HTML reports to directory")
-	runCmd.Flags().BoolVar(&regenerateSnapshots, "regenerate-snapshots", false, "Update snapshot files instead of comparing them")
-	runCmd.Flags().StringSliceVar(&filterTags, "tags", nil, "Run only tests with specified tags (comma-separated or multiple flags)")
-	runCmd.Flags().StringVar(&filterName, "filter", "", "Run only tests whose name matches the pattern (supports * wildcard)")
-	runCmd.Flags().BoolVar(&verboseOutput, "verbose", false, "Show detailed logs (all events)")
-	runCmd.Flags().BoolVar(&debugOutput, "debug", false, "Show docker commands (implies --verbose)")
-	runCmd.Flags().IntVar(&testTimeout, "timeout", 300, "Maximum time in seconds for each test execution")
-	runCmd.Flags().IntVar(&workerCount, "workers", 0, "Number of parallel test workers (0 = auto-detect from CPU count)")
-	runCmd.Flags().BoolVar(&cloudMode, "cloud", false, "Run tests on remote cloud server (configured via chiperka.yaml cloud.url or CHIPERKA_CLOUD_URL env)")
-	runCmd.Flags().Float64Var(&cpuThreshold, "cpu-threshold", 0, "CPU load threshold (0.0-1.0) - pause test execution when exceeded (0 = disabled)")
-	runCmd.Flags().BoolVar(&teamcityOutput, "teamcity", false, "Output TeamCity service messages for IDE integration")
-	runCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output NDJSON for machine consumption")
-	runCmd.Flags().StringVar(&pathMapping, "path-mapping", "", "Path prefix mapping for artifact paths (container=host, e.g. /srv/chiperka=/Users/me/project)")
-	runCmd.Flags().StringVar(&configFile, "configuration", "", "Path to chiperka.yaml configuration file (auto-discovered if not set)")
-	runCmd.Flags().StringVar(&cloudProject, "project", "", "Project slug for cloud runs (env: CHIPERKA_PROJECT, config: cloud.project)")
+	rootCmd.AddCommand(testCmd)
+	testCmd.Flags().StringVar(&junitOutput, "junit", "", "Write JUnit XML report to file")
+	testCmd.Flags().StringVar(&htmlOutput, "html", "", "Write HTML reports to directory")
+	testCmd.Flags().BoolVar(&regenerateSnapshots, "regenerate-snapshots", false, "Update snapshot files instead of comparing them")
+	testCmd.Flags().StringSliceVar(&filterTags, "tags", nil, "Run only tests with specified tags (comma-separated or multiple flags)")
+	testCmd.Flags().StringVar(&filterName, "filter", "", "Run only tests whose name matches the pattern (supports * wildcard)")
+	testCmd.Flags().BoolVar(&verboseOutput, "verbose", false, "Show detailed logs (all events)")
+	testCmd.Flags().BoolVar(&debugOutput, "debug", false, "Show docker commands (implies --verbose)")
+	testCmd.Flags().IntVar(&testTimeout, "timeout", 300, "Maximum time in seconds for each test execution")
+	testCmd.Flags().IntVar(&workerCount, "workers", 0, "Number of parallel test workers (0 = auto-detect from CPU count)")
+	testCmd.Flags().BoolVar(&cloudMode, "cloud", false, "Run tests on remote cloud server (configured via chiperka.yaml cloud.url or CHIPERKA_CLOUD_URL env)")
+	testCmd.Flags().Float64Var(&cpuThreshold, "cpu-threshold", 0, "CPU load threshold (0.0-1.0) - pause test execution when exceeded (0 = disabled)")
+	testCmd.Flags().BoolVar(&teamcityOutput, "teamcity", false, "Output TeamCity service messages for IDE integration")
+	testCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output NDJSON for machine consumption")
+	testCmd.Flags().StringVar(&pathMapping, "path-mapping", "", "Path prefix mapping for artifact paths (container=host, e.g. /srv/chiperka=/Users/me/project)")
+	testCmd.Flags().StringVar(&configFile, "configuration", "", "Path to chiperka.yaml configuration file (auto-discovered if not set)")
+	testCmd.Flags().StringVar(&cloudProject, "project", "", "Project slug for cloud runs (env: CHIPERKA_PROJECT, config: cloud.project)")
 }
 
-// runTests is the main entry point for the run command.
+// runTests is the main entry point for the test command (formerly "run").
 func runTests(cmd *cobra.Command, args []string) error {
 	defer telemetry.Wait(4 * time.Second)
 

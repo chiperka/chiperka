@@ -25,7 +25,7 @@ tests:
 ```
 
 ```
-$ chiperka run ./tests
+$ chiperka test ./tests
 
 Chiperka Test Runner v1.5.0
   1 tests in 1 suites, 8 workers
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/chiperka/chiperka/main/install.sh |
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v ./:/code:delegated \
-  finie/chiperka:latest chiperka run ./tests
+  finie/chiperka:latest chiperka test ./tests
 ```
 
 Requires Docker for local use.
@@ -75,10 +75,10 @@ Requires Docker for local use.
 chiperka init
 
 # Run it
-chiperka run ./tests
+chiperka test ./tests
 
 # Generate HTML report
-chiperka run ./tests --html report.html
+chiperka test ./tests --html report.html
 ```
 
 ## Links

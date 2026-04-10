@@ -27,7 +27,7 @@ If .chiperka/chiperka.yaml already exists, init exits without modifying anything
 Example:
   mkdir my-project && cd my-project
   chiperka init
-  chiperka run tests`,
+  chiperka test tests`,
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
 	RunE:         runInit,
@@ -151,7 +151,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println("Created tests/health.chiperka")
 	fmt.Println("Created tests/api.chiperka")
 	fmt.Println()
-	fmt.Println("Run your tests with: chiperka run tests")
+	fmt.Println("Run your tests with: chiperka test tests")
 
 	return nil
 }

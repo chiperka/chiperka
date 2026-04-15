@@ -199,8 +199,6 @@ func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	filter, _ := request.GetArguments()["filter"].(string)
 	configFile, _ := request.GetArguments()["configuration"].(string)
 
-	// Surface chiperka.yaml legacy errors here even though we no longer
-	// consume services from it — keeps the validate tool honest.
 	if _, err := loadConfig(configFile); err != nil {
 		return nil, err
 	}
@@ -210,19 +208,27 @@ func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		return nil, err
 	}
 
+	// Also discover endpoints
+	parsed, err := discovery.AllWithConfig(defaultConfigFile)
+	if err != nil {
+		return nil, err
+	}
+
 	type issue struct {
-		Level   string `json:"level"`
-		File    string `json:"file"`
-		Suite   string `json:"suite,omitempty"`
-		Test    string `json:"test,omitempty"`
-		Message string `json:"message"`
+		Level    string `json:"level"`
+		File     string `json:"file"`
+		Suite    string `json:"suite,omitempty"`
+		Test     string `json:"test,omitempty"`
+		Endpoint string `json:"endpoint,omitempty"`
+		Message  string `json:"message"`
 	}
 	type summary struct {
-		Files    int `json:"files"`
-		Suites   int `json:"suites"`
-		Tests    int `json:"tests"`
-		Errors   int `json:"errors"`
-		Warnings int `json:"warnings"`
+		Files     int `json:"files"`
+		Suites    int `json:"suites"`
+		Tests     int `json:"tests"`
+		Endpoints int `json:"endpoints"`
+		Errors    int `json:"errors"`
+		Warnings  int `json:"warnings"`
 	}
 	type validateResult struct {
 		Valid   bool    `json:"valid"`
@@ -238,6 +244,26 @@ func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	fileSet := make(map[string]bool)
 	totalTests := 0
 
+	// Validate endpoints
+	for _, ep := range parsed.Endpoints.Endpoints {
+		fileSet[ep.FilePath] = true
+		if ep.Name == "" {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Message: "endpoint name is empty"})
+		}
+		if ep.Service == "" {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "service is empty"})
+		} else if services.GetTemplate(ep.Service) == nil {
+			result.Issues = append(result.Issues, issue{Level: "warning", File: ep.FilePath, Endpoint: ep.Name, Message: fmt.Sprintf("service %q not found in service templates", ep.Service)})
+		}
+		if ep.Method == "" {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "method is empty"})
+		}
+		if ep.URL == "" {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "url is empty"})
+		}
+	}
+
+	// Validate test suites
 	for _, suite := range tests.Suites {
 		fileSet[suite.FilePath] = true
 
@@ -283,11 +309,12 @@ func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	}
 	result.Valid = errors == 0
 	result.Summary = summary{
-		Files:    len(fileSet),
-		Suites:   len(tests.Suites),
-		Tests:    totalTests,
-		Errors:   errors,
-		Warnings: warnings,
+		Files:     len(fileSet),
+		Suites:    len(tests.Suites),
+		Tests:     totalTests,
+		Endpoints: len(parsed.Endpoints.Endpoints),
+		Errors:    errors,
+		Warnings:  warnings,
 	}
 
 	return jsonResult(result)

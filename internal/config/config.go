@@ -33,11 +33,22 @@ type CloudConfig struct {
 	Project string `yaml:"project,omitempty"` // project slug
 }
 
+// ReportConfig defines a single report type in chiperka.yaml.
+type ReportConfig struct {
+	// On lists the scopes where this report can be generated: "test", "run", "global".
+	On []string `yaml:"on"`
+	// Resolver identifies who generates the report.
+	// Built-in resolvers use "chiperka." prefix (e.g. "chiperka.html-reporter").
+	// Custom resolvers are shell commands.
+	Resolver string `yaml:"resolver"`
+}
+
 // Config represents the contents of a chiperka.yaml configuration file.
 type Config struct {
-	Discovery          []string          `yaml:"discovery,omitempty"`
-	ExecutionVariables map[string]string `yaml:"executionVariables"`
-	Cloud              CloudConfig       `yaml:"cloud,omitempty"`
+	Discovery          []string                `yaml:"discovery,omitempty"`
+	ExecutionVariables map[string]string        `yaml:"executionVariables"`
+	Cloud              CloudConfig              `yaml:"cloud,omitempty"`
+	Reports            map[string]*ReportConfig `yaml:"reports,omitempty"`
 }
 
 // Load reads a configuration file from the given path.

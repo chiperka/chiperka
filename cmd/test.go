@@ -16,19 +16,19 @@ import (
 	"github.com/spf13/cobra"
 	"chiperka-cli/internal/cloud"
 	"chiperka-cli/internal/config"
-	"chiperka-cli/internal/result"
 	"chiperka-cli/internal/events"
 	"chiperka-cli/internal/events/subscribers"
 	"chiperka-cli/internal/finder"
 	"chiperka-cli/internal/model"
 	"chiperka-cli/internal/output"
 	"chiperka-cli/internal/parser"
+	"chiperka-cli/internal/report"
+	"chiperka-cli/internal/result"
 	"chiperka-cli/internal/runner"
 	"chiperka-cli/internal/telemetry"
 )
 
-var junitOutput string
-var htmlOutput string
+var reportFlags []string
 var regenerateSnapshots bool
 var filterTags []string
 var filterName string
@@ -91,8 +91,7 @@ The legacy command name "run" is still accepted as an alias.`,
 
 func init() {
 	rootCmd.AddCommand(testCmd)
-	testCmd.Flags().StringVar(&junitOutput, "junit", "", "Write JUnit XML report to file")
-	testCmd.Flags().StringVar(&htmlOutput, "html", "", "Write HTML reports to directory")
+	testCmd.Flags().StringSliceVar(&reportFlags, "report", nil, "Generate reports after run (e.g. --report=html --report=junit)")
 	testCmd.Flags().BoolVar(&regenerateSnapshots, "regenerate-snapshots", false, "Update snapshot files instead of comparing them")
 	testCmd.Flags().StringSliceVar(&filterTags, "tags", nil, "Run only tests with specified tags (comma-separated or multiple flags)")
 	testCmd.Flags().StringVar(&filterName, "filter", "", "Run only tests whose name matches the pattern (supports * wildcard)")
@@ -196,7 +195,7 @@ func runTests(cmd *cobra.Command, args []string) error {
 	// Set up output based on flags
 	if teamcityOutput {
 		// TeamCity mode: output service messages for IDE test runner
-		tc := subscribers.NewTeamCityReporter(os.Stdout, "", pathMapping, htmlOutput)
+		tc := subscribers.NewTeamCityReporter(os.Stdout, "", pathMapping, "")
 		tc.Register(bus)
 	} else if jsonOutput {
 		// JSON mode: NDJSON output for machine consumption
@@ -299,25 +298,33 @@ func runTests(cmd *cobra.Command, args []string) error {
 		if projectSlug == "" {
 			projectSlug = cfg.Cloud.Project
 		}
-		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter, projectSlug)
+		err := runTestsCloud(cloudURL, tests, services, startTime, bus, emitter, projectSlug, cfg)
 		return err // runTestsCloud already wraps with ExitError
 	}
 
-	// Create report writers if output requested (needs to track time from start)
-	var junitWriter *output.JUnitWriter
-	if junitOutput != "" {
-		junitWriter = output.NewJUnitWriter()
+	// Validate report flags against config
+	var activeReports []string
+	if len(reportFlags) > 0 {
+		if cfg.Reports == nil || len(cfg.Reports) == 0 {
+			return exitErrorf(ExitValidationError, "--report used but no reports configured in chiperka.yaml")
+		}
+		for _, r := range reportFlags {
+			if _, ok := cfg.Reports[r]; !ok {
+				return exitErrorf(ExitValidationError, "unknown report type %q (not configured in chiperka.yaml)", r)
+			}
+			activeReports = append(activeReports, r)
+		}
 	}
 
+	// Check if HTML report is requested (need writer for per-test callback)
 	var htmlWriter *output.HTMLWriter
-	if htmlOutput != "" {
-		if err := os.RemoveAll(htmlOutput); err != nil {
-			return fmt.Errorf("failed to clean HTML output directory: %w", err)
+	hasHTMLReport := false
+	for _, r := range activeReports {
+		if cfg.Reports[r].Resolver == "chiperka.html-reporter" {
+			hasHTMLReport = true
+			htmlWriter = output.NewHTMLWriter()
+			break
 		}
-		if err := os.MkdirAll(htmlOutput, 0o755); err != nil {
-			return fmt.Errorf("failed to create HTML output directory: %w", err)
-		}
-		htmlWriter = output.NewHTMLWriter()
 	}
 
 	// Load machine config for capacity and maxContainers
@@ -365,12 +372,14 @@ func runTests(cmd *cobra.Command, args []string) error {
 
 	// Set per-test HTML callback so each test gets its own HTML file
 	// immediately after completion (before the TeamCity event fires).
-	if htmlWriter != nil {
-		htmlDir := htmlOutput
+	if hasHTMLReport && htmlWriter != nil {
 		hw := htmlWriter
-		r.SetOnTestComplete(func(result *model.TestResult, suiteName, suiteFilePath string) {
-			if _, err := hw.WriteTestReport(result, suiteName, suiteFilePath, htmlDir); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to write test report for %s: %v\n", result.Test.Name, err)
+		r.SetOnTestComplete(func(tr *model.TestResult, suiteName, suiteFilePath string) {
+			// Write per-test HTML into the report directory
+			testReportDir := filepath.Join(".chiperka", "reports", "test", tr.UUID, "html")
+			os.MkdirAll(testReportDir, 0755)
+			if _, err := hw.WriteTestReport(tr, suiteName, suiteFilePath, testReportDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write test report for %s: %v\n", tr.Test.Name, err)
 			}
 		})
 	}
@@ -397,8 +406,8 @@ func runTests(cmd *cobra.Command, args []string) error {
 		Capacity:         capacity,
 		ExecutorType:     runStats.ExecutorType,
 		ServiceCount:     runStats.ServiceCount,
-		HTMLReport:       htmlOutput != "",
-		JUnitReport:      junitOutput != "",
+		HTMLReport:       hasHTMLReport,
+		JUnitReport:      hasReportType(activeReports, cfg, "chiperka.junit-reporter"),
 		TagsFilter:       len(filterTags) > 0,
 		NameFilter:       filterName != "",
 		Snapshots:        runStats.HasSnapshots,
@@ -410,44 +419,18 @@ func runTests(cmd *cobra.Command, args []string) error {
 		Debug:            debugOutput,
 	}, runResult.TotalTests(), runResult.TotalPassed(), runResult.TotalFailed(), runResult.TotalSkipped(), len(tests.Suites))
 
-	// Get weblink prefix for CLI output (e.g., "http://localhost:8080/reports")
-	weblink := os.Getenv("CHIPERKA_WEBLINK")
-	if weblink != "" {
-		weblink = strings.TrimSuffix(weblink, "/")
-	}
-
-	// Write JUnit report if requested
-	if junitWriter != nil {
-		if err := junitWriter.Write(runResult, junitOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write JUnit report: %v\n", err)
-		} else {
-			fields := events.Fields{
-				"action": "junit_write",
-				"target": junitOutput,
-				"msg":    "JUnit report written",
-			}
-			if weblink != "" {
-				fields["url"] = weblink + "/" + filepath.Base(junitOutput)
-			}
-			emitter.Info(fields)
-		}
-	}
-
-	// Write HTML dashboard (index.html with links to per-test reports)
-	if htmlWriter != nil {
-		if err := htmlWriter.WriteDashboard(runResult, htmlOutput, Version); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write HTML dashboard: %v\n", err)
-		} else {
-			target := filepath.Join(htmlOutput, "index.html")
-			fields := events.Fields{
-				"action": "html_write",
-				"target": target,
-				"msg":    "HTML report written",
-			}
-			if weblink != "" {
-				fields["url"] = weblink + "/" + filepath.Base(htmlOutput) + "/index.html"
-			}
-			emitter.Info(fields)
+	// Generate reports if requested (after results are persisted)
+	for _, reportType := range activeReports {
+		meta, err := report.GenerateFromResult(cfg, reportType, report.ScopeRun, runUUID, runResult, Version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to generate %s report: %v\n", reportType, err)
+		} else if !teamcityOutput && !jsonOutput {
+			emitter.Info(events.Fields{
+				"action": "report_generated",
+				"type":   reportType,
+				"files":  fmt.Sprintf("%d", len(meta.Files)),
+				"msg":    fmt.Sprintf("Report %q generated (%d files)", reportType, len(meta.Files)),
+			})
 		}
 	}
 
@@ -563,7 +546,7 @@ func resolveCloudToken(apiURL string) string {
 }
 
 // runTestsCloud uploads tests to a remote API server and streams results.
-func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter, projectSlug string) error {
+func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.ServiceTemplateCollection, startTime time.Time, bus *events.Bus, emitter *events.Emitter, projectSlug string, cfg *config.Config) error {
 	token := resolveCloudToken(apiURL)
 	client := cloud.NewClient(apiURL, token)
 
@@ -664,48 +647,52 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 		return fmt.Errorf("stream error: %w", err)
 	}
 
-	// Download HTML report if requested
-	if htmlOutput != "" {
-		if err := os.RemoveAll(htmlOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to clean HTML output directory: %v\n", err)
+	// Download reports from cloud if --report flags specified
+	for _, r := range reportFlags {
+		rc, ok := cfg.Reports[r]
+		if !ok {
+			continue
 		}
-		if err := os.MkdirAll(htmlOutput, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to create HTML output directory: %v\n", err)
-		} else if err := client.DownloadHTMLReportZip(resp.ID, htmlOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to download HTML report: %v\n", err)
-		} else {
-			emitter.Info(events.Fields{
-				"action": "html_download",
-				"target": filepath.Join(htmlOutput, "index.html"),
-				"msg":    fmt.Sprintf("HTML report written to %s", filepath.Join(htmlOutput, "index.html")),
-			})
-		}
-	}
+		cloudReportDir := filepath.Join(".chiperka", "reports", "run", resp.ID, r)
+		os.MkdirAll(cloudReportDir, 0755)
 
-	// Download JUnit report if requested
-	if junitOutput != "" {
-		if err := client.DownloadReport(resp.ID, "xml", junitOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to download JUnit report: %v\n", err)
-		} else {
-			emitter.Info(events.Fields{
-				"action": "junit_download",
-				"target": junitOutput,
-				"msg":    fmt.Sprintf("JUnit report written to %s", junitOutput),
-			})
+		switch rc.Resolver {
+		case "chiperka.html-reporter":
+			if err := client.DownloadHTMLReportZip(resp.ID, cloudReportDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to download HTML report: %v\n", err)
+			} else {
+				emitter.Info(events.Fields{
+					"action": "report_download",
+					"type":   r,
+					"msg":    fmt.Sprintf("Report %q downloaded to %s", r, cloudReportDir),
+				})
+			}
+		case "chiperka.junit-reporter":
+			if err := client.DownloadReport(resp.ID, "xml", filepath.Join(cloudReportDir, "report.xml")); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to download JUnit report: %v\n", err)
+			} else {
+				emitter.Info(events.Fields{
+					"action": "report_download",
+					"type":   r,
+					"msg":    fmt.Sprintf("Report %q downloaded to %s", r, cloudReportDir),
+				})
+			}
 		}
 	}
 
 	// Record telemetry
 	total := cloudResult.Passed + cloudResult.Failed + cloudResult.Skipped
 	cloudRunStats := telemetry.CollectRunStats(tests, services)
+	cloudHasHTML := hasReportType(reportFlags, cfg, "chiperka.html-reporter")
+	cloudHasJUnit := hasReportType(reportFlags, cfg, "chiperka.junit-reporter")
 	telemetry.RecordRun(telemetry.RunParams{
 		Version:          Version,
 		DurationMs:       time.Since(startTime).Milliseconds(),
 		CloudMode:        true,
 		ExecutorType:     cloudRunStats.ExecutorType,
 		ServiceCount:     cloudRunStats.ServiceCount,
-		HTMLReport:       htmlOutput != "",
-		JUnitReport:      junitOutput != "",
+		HTMLReport:       cloudHasHTML,
+		JUnitReport:      cloudHasJUnit,
 		TagsFilter:       len(filterTags) > 0,
 		NameFilter:       filterName != "",
 		Snapshots:        cloudRunStats.HasSnapshots,
@@ -728,6 +715,19 @@ func runTestsCloud(apiURL string, tests *model.TestCollection, services *model.S
 	}
 
 	return nil
+}
+
+// hasReportType checks if any of the active report types uses the given resolver.
+func hasReportType(activeReports []string, cfg *config.Config, resolver string) bool {
+	if cfg == nil || cfg.Reports == nil {
+		return false
+	}
+	for _, r := range activeReports {
+		if rc, ok := cfg.Reports[r]; ok && rc.Resolver == resolver {
+			return true
+		}
+	}
+	return false
 }
 
 func formatBytes(b int64) string {

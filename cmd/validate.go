@@ -158,6 +158,82 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Validate endpoints
+	endpoints := parseResult.Endpoints
+	for _, ep := range endpoints.Endpoints {
+		var epIssues []validationIssue
+
+		if ep.Name == "" {
+			epIssues = append(epIssues, validationIssue{
+				Level:   "error",
+				File:    ep.FilePath,
+				Message: "endpoint name is empty",
+			})
+		}
+		if ep.Service == "" {
+			epIssues = append(epIssues, validationIssue{
+				Level:   "error",
+				File:    ep.FilePath,
+				Message: fmt.Sprintf("endpoint %q: service is empty", ep.Name),
+			})
+		} else if services.GetTemplate(ep.Service) == nil {
+			epIssues = append(epIssues, validationIssue{
+				Level:   "warning",
+				File:    ep.FilePath,
+				Message: fmt.Sprintf("endpoint %q: service %q not found in service templates", ep.Name, ep.Service),
+			})
+		}
+		if ep.Method == "" {
+			epIssues = append(epIssues, validationIssue{
+				Level:   "error",
+				File:    ep.FilePath,
+				Message: fmt.Sprintf("endpoint %q: method is empty", ep.Name),
+			})
+		}
+		if ep.URL == "" {
+			epIssues = append(epIssues, validationIssue{
+				Level:   "error",
+				File:    ep.FilePath,
+				Message: fmt.Sprintf("endpoint %q: url is empty", ep.Name),
+			})
+		}
+
+		if validateJSON {
+			if hasErrors(epIssues) {
+				for _, issue := range epIssues {
+					writeJSON(map[string]interface{}{
+						"event":    "issue",
+						"level":    issue.Level,
+						"file":     ep.FilePath,
+						"endpoint": ep.Name,
+						"message":  issue.Message,
+					})
+				}
+			} else {
+				writeJSON(map[string]interface{}{
+					"event":    "file.valid",
+					"file":     ep.FilePath,
+					"endpoint": ep.Name,
+				})
+			}
+		} else {
+			if len(epIssues) == 0 {
+				fmt.Printf("  \u2713 %s (endpoint: %s)\n", ep.FilePath, ep.Name)
+				validFiles++
+			} else {
+				if !hasErrors(epIssues) {
+					validFiles++
+				}
+				fmt.Printf("  \u2717 %s (endpoint: %s)\n", ep.FilePath, ep.Name)
+				for _, issue := range epIssues {
+					fmt.Printf("      %s: %s\n", issue.Level, issue.Message)
+				}
+			}
+		}
+
+		allIssues = append(allIssues, epIssues...)
+	}
+
 	// Validate each suite
 	for _, suite := range tests.Suites {
 		totalSuites++

@@ -23,6 +23,10 @@ func Run(version, contextText, configFile string) error {
 	s.AddTool(readRunTool(), handleReadRun)
 	s.AddTool(readTestTool(), handleReadTest)
 	s.AddTool(readArtifactTool(), handleReadArtifact)
+	s.AddTool(reportTypesTool(), handleReportTypes)
+	s.AddTool(reportGenerateTool(), handleReportGenerate)
+	s.AddTool(reportListTool(), handleReportList)
+	s.AddTool(reportGetTool(), handleReportGet)
 
 	return server.ServeStdio(s)
 }

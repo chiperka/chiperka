@@ -11,12 +11,13 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"chiperka-cli/internal/config"
+	"chiperka-cli/internal/discovery"
 	"chiperka-cli/internal/events"
-	"chiperka-cli/internal/result"
 	"chiperka-cli/internal/events/subscribers"
 	"chiperka-cli/internal/finder"
 	"chiperka-cli/internal/model"
 	"chiperka-cli/internal/parser"
+	"chiperka-cli/internal/result"
 	"chiperka-cli/internal/runner"
 	"chiperka-cli/internal/telemetry"
 	"time"
@@ -34,39 +35,28 @@ func contextTool() mcp.Tool {
 
 func listTool() mcp.Tool {
 	return mcp.NewTool("chiperka_list",
-		mcp.WithDescription("Discover Chiperka tests and available service templates. Returns suites, tests, tags, and reusable service templates (ref: values) from chiperka.yaml config."),
+		mcp.WithDescription("List resources by kind: test, service, or endpoint. Returns a compact summary for each item."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithString("path",
-			mcp.Description("Directory or .chiperka file path"),
+		mcp.WithString("kind",
+			mcp.Description("Resource kind: test, service, or endpoint"),
 			mcp.Required(),
-		),
-		mcp.WithString("filter",
-			mcp.Description("Name pattern filter (supports * wildcard)"),
-		),
-		mcp.WithString("tags",
-			mcp.Description("Comma-separated tags to filter by (e.g. \"smoke,api\")"),
-		),
-		mcp.WithString("configuration",
-			mcp.Description("Path to chiperka.yaml configuration file (auto-discovered if not set)"),
 		),
 	)
 }
 
-func readTool() mcp.Tool {
-	return mcp.NewTool("chiperka_read",
-		mcp.WithDescription("Read .chiperka test files and return parsed structured JSON. Use this to see how existing tests are written — services, setup, execution, assertions — so you can match project conventions when writing new tests."),
+func getTool() mcp.Tool {
+	return mcp.NewTool("chiperka_get",
+		mcp.WithDescription("Get full detail of a single resource by kind and name. Use after chiperka_list to drill into a specific test, service, or endpoint."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithString("path",
-			mcp.Description("Directory or .chiperka file path"),
+		mcp.WithString("kind",
+			mcp.Description("Resource kind: test, service, or endpoint"),
 			mcp.Required(),
 		),
-		mcp.WithString("filter",
-			mcp.Description("Name pattern filter (supports * wildcard)"),
-		),
-		mcp.WithString("tags",
-			mcp.Description("Comma-separated tags to filter by (e.g. \"smoke,api\")"),
+		mcp.WithString("name",
+			mcp.Description("Resource name"),
+			mcp.Required(),
 		),
 	)
 }
@@ -140,255 +130,65 @@ func handleContext(contextText string) func(ctx context.Context, request mcp.Cal
 }
 
 func handleList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
-	if path == "" {
-		return nil, fmt.Errorf("path is required")
+	kind, _ := request.GetArguments()["kind"].(string)
+	if kind == "" {
+		return nil, fmt.Errorf("kind is required")
 	}
-	filter, _ := request.GetArguments()["filter"].(string)
-	tagsStr, _ := request.GetArguments()["tags"].(string)
 
-	tests, services, err := discoverTests(path, parseTags(tagsStr), filter)
+	parsed, err := discovery.AllWithConfig(defaultConfigFile)
 	if err != nil {
 		return nil, err
 	}
 
-	type listTest struct {
-		Name     string   `json:"name"`
-		Tags     []string `json:"tags,omitempty"`
-		Services []string `json:"services,omitempty"`
-		Executor string   `json:"executor,omitempty"`
+	switch kind {
+	case "test":
+		return jsonResult(discovery.ListTests(parsed))
+	case "service":
+		return jsonResult(discovery.ListServices(parsed))
+	case "endpoint":
+		return jsonResult(discovery.ListEndpoints(parsed))
+	default:
+		return nil, fmt.Errorf("unknown kind %q (expected test, service, or endpoint)", kind)
 	}
-	type listSuite struct {
-		Name  string     `json:"name"`
-		File  string     `json:"file"`
-		Tests []listTest `json:"tests"`
-	}
-	type templateJSON struct {
-		Image        string            `json:"image"`
-		HealthCheck  string            `json:"healthcheck,omitempty"`
-		Environment  map[string]string `json:"environment,omitempty"`
-		Weight       int               `json:"weight,omitempty"`
-	}
-	type listResult struct {
-		Suites     []listSuite            `json:"suites"`
-		TotalTests int                    `json:"total_tests"`
-		TotalSuits int                    `json:"total_suites"`
-		Templates  map[string]templateJSON `json:"templates,omitempty"`
-	}
-
-	result := listResult{
-		TotalTests: tests.TotalTests(),
-		TotalSuits: len(tests.Suites),
-	}
-
-	for _, suite := range tests.Suites {
-		ls := listSuite{
-			Name: suite.Name,
-			File: suite.FilePath,
-		}
-		for _, test := range suite.Tests {
-			lt := listTest{
-				Name: test.Name,
-				Tags: test.Tags,
-			}
-			for _, svc := range test.Services {
-				name := svc.Name
-				if name == "" {
-					name = svc.Ref
-				}
-				if name != "" {
-					lt.Services = append(lt.Services, name)
-				}
-			}
-			executor := string(test.Execution.Executor)
-			if executor == "" {
-				executor = "http"
-			}
-			lt.Executor = executor
-			ls.Tests = append(ls.Tests, lt)
-		}
-		result.Suites = append(result.Suites, ls)
-	}
-
-	// Include service templates so Claude knows what ref: values are available
-	if services.HasTemplates() {
-		result.Templates = make(map[string]templateJSON)
-		for name, tmpl := range services.Templates {
-			tj := templateJSON{
-				Image:        tmpl.Image,
-				Environment:  tmpl.Environment,
-				Weight:       tmpl.Weight,
-			}
-			if tmpl.HealthCheck != nil && tmpl.HealthCheck.Test != "" {
-				tj.HealthCheck = string(tmpl.HealthCheck.Test)
-			}
-			result.Templates[name] = tj
-		}
-	}
-
-	return jsonResult(result)
 }
 
-func handleRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := request.GetArguments()["path"].(string)
-	if path == "" {
-		return nil, fmt.Errorf("path is required")
+func handleGet(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	kind, _ := request.GetArguments()["kind"].(string)
+	if kind == "" {
+		return nil, fmt.Errorf("kind is required")
 	}
-	filter, _ := request.GetArguments()["filter"].(string)
-	tagsStr, _ := request.GetArguments()["tags"].(string)
+	name, _ := request.GetArguments()["name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
 
-	tests, _, err := discoverTests(path, parseTags(tagsStr), filter)
+	parsed, err := discovery.AllWithConfig(defaultConfigFile)
 	if err != nil {
 		return nil, err
 	}
 
-	// Return the full parsed structure — suites with all test details
-	type readAssertion struct {
-		Response *model.ResponseAssertion `json:"response,omitempty"`
-		CLI      *model.CLIAssertion      `json:"cli,omitempty"`
-		Artifact *model.ArtifactAssertion `json:"artifact,omitempty"`
-	}
-	type readService struct {
-		Name        string            `json:"name,omitempty"`
-		Ref         string            `json:"ref,omitempty"`
-		Image       string            `json:"image,omitempty"`
-		Environment map[string]string `json:"environment,omitempty"`
-		HealthCheck string            `json:"healthcheck,omitempty"`
-	}
-	type readSetup struct {
-		Type    string `json:"type"`
-		Target  string `json:"target,omitempty"`
-		Method  string `json:"method,omitempty"`
-		URL     string `json:"url,omitempty"`
-		Service string `json:"service,omitempty"`
-		Command string `json:"command,omitempty"`
-	}
-	type readExecution struct {
-		Executor string `json:"executor"`
-		Target   string `json:"target,omitempty"`
-		Method   string `json:"method,omitempty"`
-		URL      string `json:"url,omitempty"`
-		Service  string `json:"service,omitempty"`
-		Command  string `json:"command,omitempty"`
-	}
-	type readTest struct {
-		Name       string          `json:"name"`
-		Tags       []string        `json:"tags,omitempty"`
-		Skipped    bool            `json:"skipped,omitempty"`
-		Services   []readService   `json:"services,omitempty"`
-		Setup      []readSetup     `json:"setup,omitempty"`
-		Execution  readExecution   `json:"execution"`
-		Assertions []readAssertion `json:"assertions,omitempty"`
-		Teardown   []readSetup     `json:"teardown,omitempty"`
-	}
-	type readSuite struct {
-		Name  string     `json:"name"`
-		File  string     `json:"file"`
-		Tests []readTest `json:"tests"`
-	}
-	type readResult struct {
-		Suites     []readSuite `json:"suites"`
-		TotalTests int         `json:"total_tests"`
-	}
-
-	result := readResult{
-		TotalTests: tests.TotalTests(),
-	}
-
-	for _, suite := range tests.Suites {
-		rs := readSuite{
-			Name: suite.Name,
-			File: suite.FilePath,
+	switch kind {
+	case "test":
+		detail, err := discovery.GetTest(parsed, name)
+		if err != nil {
+			return nil, err
 		}
-		for _, test := range suite.Tests {
-			rt := readTest{
-				Name:    test.Name,
-				Tags:    test.Tags,
-				Skipped: test.Skipped,
-			}
-
-			// Services
-			for _, svc := range test.Services {
-				s := readService{
-					Name:        svc.Name,
-					Ref:         svc.Ref,
-					Image:       svc.Image,
-					Environment: svc.Environment,
-				}
-				if svc.HealthCheck != nil && svc.HealthCheck.Test != "" {
-					s.HealthCheck = string(svc.HealthCheck.Test)
-				}
-				rt.Services = append(rt.Services, s)
-			}
-
-			// Setup
-			for _, step := range test.Setup {
-				if step.HTTP != nil {
-					rt.Setup = append(rt.Setup, readSetup{
-						Type:   "http",
-						Target: step.HTTP.Target,
-						Method: step.HTTP.Request.Method,
-						URL:    step.HTTP.Request.URL,
-					})
-				}
-				if step.CLI != nil {
-					rt.Setup = append(rt.Setup, readSetup{
-						Type:    "cli",
-						Service: step.CLI.Service,
-						Command: step.CLI.Command,
-					})
-				}
-			}
-
-			// Teardown
-			for _, step := range test.Teardown {
-				if step.HTTP != nil {
-					rt.Teardown = append(rt.Teardown, readSetup{
-						Type:   "http",
-						Target: step.HTTP.Target,
-						Method: step.HTTP.Request.Method,
-						URL:    step.HTTP.Request.URL,
-					})
-				}
-				if step.CLI != nil {
-					rt.Teardown = append(rt.Teardown, readSetup{
-						Type:    "cli",
-						Service: step.CLI.Service,
-						Command: step.CLI.Command,
-					})
-				}
-			}
-
-			// Execution
-			executor := string(test.Execution.Executor)
-			if executor == "" {
-				executor = "http"
-			}
-			rt.Execution = readExecution{Executor: executor}
-			if executor == "http" {
-				rt.Execution.Target = test.Execution.Target
-				rt.Execution.Method = test.Execution.Request.Method
-				rt.Execution.URL = test.Execution.Request.URL
-			} else if test.Execution.CLI != nil {
-				rt.Execution.Service = test.Execution.CLI.Service
-				rt.Execution.Command = test.Execution.CLI.Command
-			}
-
-			// Assertions
-			for _, a := range test.Assertions {
-				rt.Assertions = append(rt.Assertions, readAssertion{
-					Response: a.Response,
-					CLI:      a.CLI,
-					Artifact: a.Artifact,
-				})
-			}
-
-			rs.Tests = append(rs.Tests, rt)
+		return jsonResult(detail)
+	case "service":
+		tmpl, err := discovery.GetService(parsed, name)
+		if err != nil {
+			return nil, err
 		}
-		result.Suites = append(result.Suites, rs)
+		return jsonResult(tmpl)
+	case "endpoint":
+		ep, err := discovery.GetEndpoint(parsed, name)
+		if err != nil {
+			return nil, err
+		}
+		return jsonResult(ep)
+	default:
+		return nil, fmt.Errorf("unknown kind %q (expected test, service, or endpoint)", kind)
 	}
-
-	return jsonResult(result)
 }
 
 func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -851,29 +651,15 @@ func discoveryPaths(fallback string) []string {
 // specific file or directory and discovery is configured, the full spec is
 // loaded but tests are filtered to those under path.
 func discoverTests(path string, tags []string, filter string) (*model.TestCollection, *model.ServiceTemplateCollection, error) {
-	cfg, _ := loadConfig("")
-	paths := cfg.Discovery
-
-	if len(paths) == 0 {
-		// No discovery configured — use path directly (legacy behavior)
-		paths = []string{path}
-	}
-
-	files, err := finder.FindAll(paths)
+	result, err := discovery.AllWithConfig(defaultConfigFile)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if len(files) == 0 {
-		return model.NewTestCollection(), model.NewServiceTemplateCollection(), nil
-	}
-
-	p := parser.New()
-	parseResult := p.ParseAll(files)
-
-	tests := parseResult.Tests
+	tests := result.Tests
 
 	// If discovery is configured and a specific path was given, filter tests to that path
+	cfg, _ := loadConfig("")
 	if len(cfg.Discovery) > 0 && path != "." && path != "" {
 		absPath, _ := filepath.Abs(path)
 		info, statErr := os.Stat(path)
@@ -902,7 +688,7 @@ func discoverTests(path string, tags []string, filter string) (*model.TestCollec
 		tests = tests.FilterByName(filter)
 	}
 
-	return tests, parseResult.Services, nil
+	return tests, result.Services, nil
 }
 
 // discoverServices finds .chiperka files using discovery paths from config

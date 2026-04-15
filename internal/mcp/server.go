@@ -15,7 +15,7 @@ func Run(version, contextText, configFile string) error {
 
 	s.AddTool(contextTool(), handleContext(contextText))
 	s.AddTool(listTool(), handleList)
-	s.AddTool(readTool(), handleRead)
+	s.AddTool(getTool(), handleGet)
 	s.AddTool(validateTool(), handleValidate)
 	s.AddTool(executeTool(), handleExecute(version))
 	s.AddTool(runTool(), handleRun(version))

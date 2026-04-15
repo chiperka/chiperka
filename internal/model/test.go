@@ -15,8 +15,9 @@ import (
 // A .chiperka file with no `kind:` field is treated as KindTest for backward
 // compatibility with the original test-suite-only format.
 const (
-	KindTest    = "test"
-	KindService = "service"
+	KindTest     = "test"
+	KindService  = "service"
+	KindEndpoint = "endpoint"
 )
 
 // ShellCommand is a []string that can be unmarshaled from either a YAML string or a list.
@@ -856,4 +857,53 @@ func matchesPattern(name, pattern string) bool {
 		}
 	}
 	return true
+}
+
+// EndpointInput describes a single input parameter for an endpoint.
+type EndpointInput struct {
+	Name     string `yaml:"name" json:"name"`
+	Type     string `yaml:"type,omitempty" json:"type,omitempty"`
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
+}
+
+// Endpoint declares a callable entry point on a service.
+//
+// An endpoint is loaded from a .chiperka file with `kind: endpoint`. It
+// describes what can be called (service + method + URL) and what inputs it
+// accepts, but does not carry concrete values — those belong in tests.
+type Endpoint struct {
+	Kind     string          `yaml:"kind" json:"kind"`
+	Name     string          `yaml:"name" json:"name"`
+	Service  string          `yaml:"service" json:"service"`
+	Method   string          `yaml:"method" json:"method"`
+	URL      string          `yaml:"url" json:"url"`
+	Inputs   []EndpointInput `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	FilePath string          `yaml:"-" json:"file_path,omitempty"`
+}
+
+// EndpointCollection holds all discovered endpoints.
+type EndpointCollection struct {
+	Endpoints map[string]*Endpoint
+}
+
+// NewEndpointCollection creates an empty endpoint collection.
+func NewEndpointCollection() *EndpointCollection {
+	return &EndpointCollection{
+		Endpoints: make(map[string]*Endpoint),
+	}
+}
+
+// AddEndpoint adds an endpoint to the collection.
+func (c *EndpointCollection) AddEndpoint(ep *Endpoint) {
+	c.Endpoints[ep.Name] = ep
+}
+
+// GetEndpoint returns an endpoint by name, or nil if not found.
+func (c *EndpointCollection) GetEndpoint(name string) *Endpoint {
+	return c.Endpoints[name]
+}
+
+// HasEndpoints returns true if there are any endpoints in the collection.
+func (c *EndpointCollection) HasEndpoints() bool {
+	return len(c.Endpoints) > 0
 }

@@ -1080,15 +1080,31 @@ func (m *Manager) ExecInContainer(ctx context.Context, serviceName, command, wor
 	if err != nil {
 		return nil, fmt.Errorf("failed to attach exec: %w", err)
 	}
-	defer attachResp.Close()
 
-	// Read stdout and stderr
+	// Read stdout/stderr in a goroutine. Close the attach connection when context
+	// is cancelled so StdCopy unblocks — otherwise a long-running command keeps
+	// the goroutine stuck until the process finishes, ignoring the timeout.
 	var stdout, stderr bytes.Buffer
-	stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
+	}()
 
-	// Get exit code
-	inspectResp, err := retryDockerCall(ctx, "ContainerExecInspect", m.events, m.testName, func() (container.ExecInspect, error) {
-		return dockerClient.ContainerExecInspect(ctx, execResp.ID)
+	select {
+	case <-copyDone:
+		attachResp.Close()
+	case <-ctx.Done():
+		attachResp.Close()
+		<-copyDone
+		return nil, fmt.Errorf("exec timed out: %w", ctx.Err())
+	}
+
+	// Get exit code — use fresh context since the exec already finished
+	inspectCtx, inspectCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer inspectCancel()
+	inspectResp, err := retryDockerCall(inspectCtx, "ContainerExecInspect", m.events, m.testName, func() (container.ExecInspect, error) {
+		return dockerClient.ContainerExecInspect(inspectCtx, execResp.ID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect exec: %w", err)

@@ -3,11 +3,12 @@
 // A .chiperka file declares one resource. The top-level `kind:` field selects
 // what is being declared:
 //
-//   - kind: test    (or no kind field) → a test suite (model.Suite)
-//   - kind: service → a service template (model.ServiceTemplate)
+//   - kind: test     (or no kind field) → a test suite (model.Suite)
+//   - kind: service  → a service template (model.ServiceTemplate)
+//   - kind: endpoint → a callable entry point (model.Endpoint)
 //
 // ParseAll walks a list of file paths, dispatches each file by kind, and
-// returns a ParseResult with both collections populated.
+// returns a ParseResult with all collections populated.
 package parser
 
 import (
@@ -60,9 +61,10 @@ func New() *Parser {
 // ParseResult contains all resources discovered from a set of .chiperka files,
 // split by kind.
 type ParseResult struct {
-	Tests    *model.TestCollection
-	Services *model.ServiceTemplateCollection
-	Errors   []error
+	Tests     *model.TestCollection
+	Services  *model.ServiceTemplateCollection
+	Endpoints *model.EndpointCollection
+	Errors    []error
 }
 
 // ParseFile reads a single .chiperka file as a test suite. It returns an
@@ -121,9 +123,10 @@ func (p *Parser) ParseBytes(data []byte) (*model.Suite, error) {
 // result.Errors and do not abort processing of remaining files.
 func (p *Parser) ParseAll(filePaths []string) *ParseResult {
 	result := &ParseResult{
-		Tests:    model.NewTestCollection(),
-		Services: model.NewServiceTemplateCollection(),
-		Errors:   make([]error, 0),
+		Tests:     model.NewTestCollection(),
+		Services:  model.NewServiceTemplateCollection(),
+		Endpoints: model.NewEndpointCollection(),
+		Errors:    make([]error, 0),
 	}
 
 	for _, path := range filePaths {
@@ -171,8 +174,28 @@ func (p *Parser) ParseAll(filePaths []string) *ParseResult {
 			template.FilePath = path
 			result.Services.AddTemplate(&template)
 
+		case model.KindEndpoint:
+			var ep model.Endpoint
+			if err := yaml.Unmarshal(data, &ep); err != nil {
+				result.Errors = append(result.Errors, fmt.Errorf("failed to parse YAML in %s: %w", path, err))
+				continue
+			}
+			if ep.Name == "" {
+				result.Errors = append(result.Errors, fmt.Errorf("%s: endpoint is missing required 'name' field", path))
+				continue
+			}
+			if existing := result.Endpoints.GetEndpoint(ep.Name); existing != nil {
+				result.Errors = append(result.Errors, fmt.Errorf(
+					"%s: duplicate endpoint name %q (already declared in %s)",
+					path, ep.Name, existing.FilePath,
+				))
+				continue
+			}
+			ep.FilePath = path
+			result.Endpoints.AddEndpoint(&ep)
+
 		default:
-			result.Errors = append(result.Errors, fmt.Errorf("%s: unknown kind %q (expected %q or %q)", path, kind, model.KindTest, model.KindService))
+			result.Errors = append(result.Errors, fmt.Errorf("%s: unknown kind %q (expected %q, %q, or %q)", path, kind, model.KindTest, model.KindService, model.KindEndpoint))
 		}
 	}
 

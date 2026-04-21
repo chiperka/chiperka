@@ -3,19 +3,50 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"chiperka-cli/internal/result"
 )
 
+// runOverview is a lightweight view of a run for listing — no test details.
+type runOverview struct {
+	UUID      string    `json:"uuid"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"started_at"`
+	Duration  int64     `json:"duration_ms"`
+	Passed    int       `json:"passed"`
+	Failed    int       `json:"failed"`
+	Errored   int       `json:"errored"`
+	Skipped   int       `json:"skipped"`
+	Total     int       `json:"total"`
+}
+
+func toOverview(r *result.RunSummary) runOverview {
+	return runOverview{
+		UUID:      r.UUID,
+		Status:    r.Status,
+		StartedAt: r.StartedAt,
+		Duration:  r.Duration,
+		Passed:    r.Passed,
+		Failed:    r.Failed,
+		Errored:   r.Errored,
+		Skipped:   r.Skipped,
+		Total:     r.Total,
+	}
+}
+
 func readRunTool() mcp.Tool {
 	return mcp.NewTool("chiperka_read_run",
-		mcp.WithDescription("Read a stored test run result. Returns run summary with test list and UUIDs. Use chiperka_read_test to drill into individual test details."),
+		mcp.WithDescription("Read a stored test run result. Returns run summary and only failed/errored/skipped tests by default (passed count is in the summary). Set include_passed=true to also list passed tests. Use chiperka_read_test to drill into individual test details."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithString("uuid",
 			mcp.Description("Run UUID (e.g. lr-abcd1234-...)"),
 			mcp.Required(),
+		),
+		mcp.WithBoolean("include_passed",
+			mcp.Description("Include passed tests in the response (default false). Only use when you need to inspect passed tests."),
 		),
 	)
 }
@@ -71,11 +102,12 @@ func handleReadRuns(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		return nil, fmt.Errorf("failed to list runs: %w", err)
 	}
 
-	if runs == nil {
-		runs = []result.RunSummary{}
+	overviews := make([]runOverview, 0, len(runs))
+	for i := range runs {
+		overviews = append(overviews, toOverview(&runs[i]))
 	}
 
-	return jsonResult(runs)
+	return jsonResult(overviews)
 }
 
 func handleReadRun(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -84,10 +116,22 @@ func handleReadRun(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallT
 		return nil, fmt.Errorf("uuid is required")
 	}
 
+	includePassed, _ := request.GetArguments()["include_passed"].(bool)
+
 	store := storeForUUID(uuid)
 	run, err := store.GetRun(uuid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read run: %w", err)
+	}
+
+	if !includePassed {
+		filtered := make([]result.TestRef, 0, run.Failed+run.Errored+run.Skipped)
+		for _, t := range run.Tests {
+			if t.Status != "passed" {
+				filtered = append(filtered, t)
+			}
+		}
+		run.Tests = filtered
 	}
 
 	return jsonResult(run)

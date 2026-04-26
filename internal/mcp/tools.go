@@ -285,11 +285,19 @@ func handleValidate(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		} else if services.GetTemplate(ep.Service) == nil {
 			result.Issues = append(result.Issues, issue{Level: "warning", File: ep.FilePath, Endpoint: ep.Name, Message: fmt.Sprintf("service %q not found in service templates", ep.Service)})
 		}
-		if ep.Method == "" {
-			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "method is empty"})
+		if ep.HTTP == nil && ep.Command == nil {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "endpoint must define either spec.endpoint (HTTP) or spec.command (CLI)"})
 		}
-		if ep.URL == "" {
-			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "url is empty"})
+		if ep.HTTP != nil {
+			if ep.HTTP.Method == "" {
+				result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "spec.endpoint.method is empty"})
+			}
+			if ep.HTTP.URL == "" {
+				result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "spec.endpoint.url is empty"})
+			}
+		}
+		if ep.Command != nil && ep.Command.Cmd == "" {
+			result.Issues = append(result.Issues, issue{Level: "error", File: ep.FilePath, Endpoint: ep.Name, Message: "spec.command.cmd is empty"})
 		}
 	}
 

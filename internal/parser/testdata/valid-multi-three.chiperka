@@ -1,10 +1,10 @@
 kind: Test
 metadata:
-  name: test-two
+  name: test-three
 spec:
-  endpoint: api-two
+  endpoint: api-three
   execution:
     request:
       method: GET
-      url: /two
+      url: /three
   assertions: []

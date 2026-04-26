@@ -1,9 +1,11 @@
-kind: service
-name: api
-image: ghcr.io/myorg/api:latest
-environment:
-  DB_URL: postgres://db:5432/test
-  LOG_LEVEL: debug
-healthcheck:
-  test: "curl -f http://localhost:8080/health"
-  retries: 30
+kind: Service
+metadata:
+  name: api
+spec:
+  image: ghcr.io/myorg/api:latest
+  environment:
+    DB_URL: postgres://db:5432/test
+    LOG_LEVEL: debug
+  healthcheck:
+    test: "curl -f http://localhost:8080/health"
+    retries: 30

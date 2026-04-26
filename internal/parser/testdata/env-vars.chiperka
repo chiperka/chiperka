@@ -1,9 +1,11 @@
-name: env-suite
-tests:
-  - name: env-test
-    execution:
-      target: $CHIPERKA_TEST_TARGET
-      request:
-        method: GET
-        url: /api/$CHIPERKA_TEST_PATH
-    assertions: []
+kind: Test
+metadata:
+  name: env-test
+spec:
+  endpoint: api-env
+  execution:
+    target: $CHIPERKA_TEST_TARGET
+    request:
+      method: GET
+      url: /api/$CHIPERKA_TEST_PATH
+  assertions: []

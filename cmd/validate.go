@@ -167,34 +167,50 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			epIssues = append(epIssues, validationIssue{
 				Level:   "error",
 				File:    ep.FilePath,
-				Message: "endpoint name is empty",
+				Message: "endpoint metadata.name is empty",
 			})
 		}
 		if ep.Service == "" {
 			epIssues = append(epIssues, validationIssue{
 				Level:   "error",
 				File:    ep.FilePath,
-				Message: fmt.Sprintf("endpoint %q: service is empty", ep.Name),
+				Message: fmt.Sprintf("endpoint %q: spec.service is empty (every Endpoint must reference a kind: Service)", ep.Name),
 			})
 		} else if services.GetTemplate(ep.Service) == nil {
 			epIssues = append(epIssues, validationIssue{
-				Level:   "warning",
+				Level:   "error",
 				File:    ep.FilePath,
-				Message: fmt.Sprintf("endpoint %q: service %q not found in service templates", ep.Name, ep.Service),
+				Message: fmt.Sprintf("endpoint %q: spec.service references unknown kind: Service %q", ep.Name, ep.Service),
 			})
 		}
-		if ep.Method == "" {
+		if ep.HTTP == nil && ep.Command == nil {
 			epIssues = append(epIssues, validationIssue{
 				Level:   "error",
 				File:    ep.FilePath,
-				Message: fmt.Sprintf("endpoint %q: method is empty", ep.Name),
+				Message: fmt.Sprintf("endpoint %q: must define either spec.endpoint (HTTP) or spec.command (CLI)", ep.Name),
 			})
 		}
-		if ep.URL == "" {
+		if ep.HTTP != nil {
+			if ep.HTTP.Method == "" {
+				epIssues = append(epIssues, validationIssue{
+					Level:   "error",
+					File:    ep.FilePath,
+					Message: fmt.Sprintf("endpoint %q: spec.endpoint.method is empty", ep.Name),
+				})
+			}
+			if ep.HTTP.URL == "" {
+				epIssues = append(epIssues, validationIssue{
+					Level:   "error",
+					File:    ep.FilePath,
+					Message: fmt.Sprintf("endpoint %q: spec.endpoint.url is empty", ep.Name),
+				})
+			}
+		}
+		if ep.Command != nil && ep.Command.Cmd == "" {
 			epIssues = append(epIssues, validationIssue{
 				Level:   "error",
 				File:    ep.FilePath,
-				Message: fmt.Sprintf("endpoint %q: url is empty", ep.Name),
+				Message: fmt.Sprintf("endpoint %q: spec.command.cmd is empty", ep.Name),
 			})
 		}
 
@@ -260,7 +276,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		// Per-test checks
 		for _, test := range suite.Tests {
 			totalTests++
-			issues := validateTest(test, suite, services)
+			issues := validateTest(test, suite, services, endpoints)
 			fileIssues = append(fileIssues, issues...)
 		}
 
@@ -334,7 +350,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func validateTest(test model.Test, suite model.Suite, services *model.ServiceTemplateCollection) []validationIssue {
+func validateTest(test model.Test, suite model.Suite, services *model.ServiceTemplateCollection, endpoints *model.EndpointCollection) []validationIssue {
 	var issues []validationIssue
 
 	// Test name
@@ -343,7 +359,26 @@ func validateTest(test model.Test, suite model.Suite, services *model.ServiceTem
 			Level:   "error",
 			File:    suite.FilePath,
 			Suite:   suite.Name,
-			Message: "test name is empty",
+			Message: "test metadata.name is empty",
+		})
+	}
+
+	// Endpoint reference required (every Test verifies one Endpoint)
+	if test.Endpoint == "" {
+		issues = append(issues, validationIssue{
+			Level:   "error",
+			File:    suite.FilePath,
+			Suite:   suite.Name,
+			Test:    test.Name,
+			Message: "spec.endpoint is empty (every Test must reference a kind: Endpoint)",
+		})
+	} else if endpoints != nil && endpoints.GetEndpoint(test.Endpoint) == nil {
+		issues = append(issues, validationIssue{
+			Level:   "error",
+			File:    suite.FilePath,
+			Suite:   suite.Name,
+			Test:    test.Name,
+			Message: fmt.Sprintf("spec.endpoint references unknown kind: Endpoint %q", test.Endpoint),
 		})
 	}
 
@@ -358,38 +393,37 @@ func validateTest(test model.Test, suite model.Suite, services *model.ServiceTem
 		})
 	}
 
-	// Per-service checks
+	// Per-service checks — every entry must have a ref to a kind: Service.
+	// Inline service definitions are not supported.
 	for _, svc := range test.Services {
-		if svc.Ref != "" {
-			// Resolve template reference
-			resolved, err := services.ResolveService(svc)
-			if err != nil {
-				issues = append(issues, validationIssue{
-					Level:   "error",
-					File:    suite.FilePath,
-					Suite:   suite.Name,
-					Test:    test.Name,
-					Message: fmt.Sprintf("service %q: template %q not found", svcDisplayName(svc), svc.Ref),
-				})
-				continue
-			}
-			// Check resolved image
-			if resolved.Image == "" {
-				issues = append(issues, validationIssue{
-					Level:   "error",
-					File:    suite.FilePath,
-					Suite:   suite.Name,
-					Test:    test.Name,
-					Message: fmt.Sprintf("service %q: image is empty after resolving template %q", svcDisplayName(svc), svc.Ref),
-				})
-			}
-		} else if svc.Image == "" {
+		if svc.Ref == "" {
 			issues = append(issues, validationIssue{
 				Level:   "error",
 				File:    suite.FilePath,
 				Suite:   suite.Name,
 				Test:    test.Name,
-				Message: fmt.Sprintf("service %q: image is empty", svcDisplayName(svc)),
+				Message: fmt.Sprintf("service %q: missing required 'ref' (inline service definitions are not supported)", svcDisplayName(svc)),
+			})
+			continue
+		}
+		resolved, err := services.ResolveService(svc)
+		if err != nil {
+			issues = append(issues, validationIssue{
+				Level:   "error",
+				File:    suite.FilePath,
+				Suite:   suite.Name,
+				Test:    test.Name,
+				Message: fmt.Sprintf("service %q: %v", svcDisplayName(svc), err),
+			})
+			continue
+		}
+		if resolved.Image == "" {
+			issues = append(issues, validationIssue{
+				Level:   "error",
+				File:    suite.FilePath,
+				Suite:   suite.Name,
+				Test:    test.Name,
+				Message: fmt.Sprintf("service %q: image is empty after resolving kind: Service %q", svcDisplayName(svc), svc.Ref),
 			})
 		}
 	}

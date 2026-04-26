@@ -124,11 +124,19 @@ type ListEndpoint struct {
 func ListEndpoints(r *Result) []ListEndpoint {
 	var items []ListEndpoint
 	for _, ep := range r.Endpoints.Endpoints {
+		method, url := "", ""
+		if ep.HTTP != nil {
+			method = ep.HTTP.Method
+			url = ep.HTTP.URL
+		} else if ep.Command != nil {
+			method = "CLI"
+			url = ep.Command.Cmd
+		}
 		items = append(items, ListEndpoint{
 			Name:    ep.Name,
 			Service: ep.Service,
-			Method:  ep.Method,
-			URL:     ep.URL,
+			Method:  method,
+			URL:     url,
 			File:    ep.FilePath,
 		})
 	}

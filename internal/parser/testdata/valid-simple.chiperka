@@ -1,11 +1,13 @@
-name: simple-suite
-tests:
-  - name: health-check
-    execution:
-      target: http://api:8080
-      request:
-        method: GET
-        url: /health
-    assertions:
-      - response:
-          statusCode: 200
+kind: Test
+metadata:
+  name: health-check
+spec:
+  endpoint: api-health
+  execution:
+    target: http://api:8080
+    request:
+      method: GET
+      url: /health
+  assertions:
+    - response:
+        statusCode: 200

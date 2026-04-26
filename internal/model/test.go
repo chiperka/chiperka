@@ -12,13 +12,21 @@ import (
 
 // Kind values for the top-level discriminator in .chiperka files.
 //
-// A .chiperka file with no `kind:` field is treated as KindTest for backward
-// compatibility with the original test-suite-only format.
+// All `.chiperka` files declare exactly one kind. There is no default —
+// a missing or unknown `kind:` is an error.
 const (
-	KindTest     = "test"
-	KindService  = "service"
-	KindEndpoint = "endpoint"
+	KindTest     = "Test"
+	KindService  = "Service"
+	KindEndpoint = "Endpoint"
 )
+
+// Metadata is the common identifying block on every kind: Service, Endpoint, Test.
+// Mirrors the Kubernetes-style `metadata:` field.
+type Metadata struct {
+	Name        string   `yaml:"name" json:"name"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Tags        []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+}
 
 // ShellCommand is a []string that can be unmarshaled from either a YAML string or a list.
 // When given a string, it splits using shell-like tokenization (respects single/double quotes).
@@ -389,61 +397,103 @@ type ServiceArtifact struct {
 	Path string `yaml:"path" json:"path"`
 }
 
-// Service defines a Docker service to start before test execution.
+// Service is a reference to a kind: Service file from inside a Test.
+//
+// Inline service definitions are not supported — every service used by a test
+// must be declared as a standalone kind: Service file and pulled in via Ref.
+// Selected fields can still be overridden per-test (Name, ContainerName,
+// environment merge, etc.).
 type Service struct {
-	// Ref references a service template by name (mutually exclusive with inline definition)
-	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
-	// Name is a unique identifier for this service instance (also used as hostname in network)
+	// Ref is the metadata.name of the kind: Service to pull in. Required.
+	Ref string `yaml:"ref" json:"ref"`
+	// Name overrides the hostname used on the test network (defaults to Ref)
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 	// ContainerName is the explicit container name (optional)
 	ContainerName string `yaml:"containerName,omitempty" json:"container_name,omitempty"`
-	// Image is the Docker image to use
-	Image string `yaml:"image,omitempty" json:"image,omitempty"`
-	// Command overrides the default command of the image (string or list)
-	Command ShellCommand `yaml:"command,omitempty" json:"command,omitempty"`
-	// WorkingDir is the working directory inside the container
-	WorkingDir string `yaml:"workingDir,omitempty" json:"working_dir,omitempty"`
-	// Environment variables
+	// Environment overrides merge with the template environment (override wins)
 	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
-	// Health check configuration
-	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
-	// Artifacts to collect from the container after test execution
+	// Artifacts add to the template's artifact list
 	Artifacts []ServiceArtifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	// Weight represents the resource cost of running this service (default 1)
-	Weight int `yaml:"weight,omitempty" json:"weight,omitempty"`
-	// Hooks inherited from service template
-	Hooks []Hook `yaml:"-" json:"hooks,omitempty"`
+
+	// Resolved fields below are populated by ServiceTemplateCollection.ResolveService
+	// from the referenced template. They are not read from YAML directly.
+	Image       string            `yaml:"-" json:"image,omitempty"`
+	Command     ShellCommand      `yaml:"-" json:"command,omitempty"`
+	WorkingDir  string            `yaml:"-" json:"working_dir,omitempty"`
+	HealthCheck *HealthCheck      `yaml:"-" json:"healthcheck,omitempty"`
+	Weight      int               `yaml:"-" json:"weight,omitempty"`
+	Hooks       []Hook            `yaml:"-" json:"hooks,omitempty"`
 }
 
-// ServiceTemplate defines a reusable service configuration.
+// ServiceTemplate is a kind: Service object loaded from a .chiperka file.
 //
-// Service templates are loaded from .chiperka files with `kind: service` at the
-// top level. Each file declares one template with flat top-level fields. They
-// used to live in `.chiperka/chiperka.yaml` under the `services:` map; that
-// shape is no longer supported — see `chiperka migrate`.
+// On the YAML surface, the file uses the Kubernetes-style shape:
+//
+//   kind: Service
+//   metadata:
+//     name: postgres
+//   spec:
+//     image: postgres:16
+//
+// The struct itself stores the spec fields flat for convenience. The custom
+// UnmarshalYAML reads the nested YAML and populates the flat Go fields.
 type ServiceTemplate struct {
-	// Kind discriminator. Must be "service" when loaded from a .chiperka file.
-	Kind string `yaml:"kind"`
-	// Name is the unique identifier for this template
-	Name string `yaml:"name"`
-	// Image is the Docker image to use
-	Image string `yaml:"image,omitempty"`
-	// Command overrides the default command of the image (string or list)
-	Command ShellCommand `yaml:"command,omitempty"`
-	// WorkingDir is the working directory inside the container
-	WorkingDir string `yaml:"workingDir,omitempty"`
-	// Environment variables
-	Environment map[string]string `yaml:"environment,omitempty"`
-	// Health check configuration
-	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty"`
-	// Artifacts to collect from the container after test execution
-	Artifacts []ServiceArtifact `yaml:"artifacts,omitempty"`
-	// Weight represents the resource cost of running this service (default 1)
-	Weight int `yaml:"weight,omitempty"`
-	// Hooks define actions at specific points in the test lifecycle
-	Hooks []Hook `yaml:"hooks,omitempty"`
+	Kind        string            `yaml:"-" json:"kind"`
+	Name        string            `yaml:"-" json:"name"`
+	Description string            `yaml:"-" json:"description,omitempty"`
+	Tags        []string          `yaml:"-" json:"tags,omitempty"`
+	Image       string            `yaml:"-" json:"image,omitempty"`
+	Command     ShellCommand      `yaml:"-" json:"command,omitempty"`
+	WorkingDir  string            `yaml:"-" json:"working_dir,omitempty"`
+	Environment map[string]string `yaml:"-" json:"environment,omitempty"`
+	HealthCheck *HealthCheck      `yaml:"-" json:"healthcheck,omitempty"`
+	Artifacts   []ServiceArtifact `yaml:"-" json:"artifacts,omitempty"`
+	ContainerName string          `yaml:"-" json:"container_name,omitempty"`
+	Weight      int               `yaml:"-" json:"weight,omitempty"`
+	Hooks       []Hook            `yaml:"-" json:"hooks,omitempty"`
 	// FilePath stores the source file path (not from YAML, set by parser)
-	FilePath string `yaml:"-"`
+	FilePath    string            `yaml:"-" json:"file_path,omitempty"`
+}
+
+// serviceTemplateYAML mirrors the on-disk YAML shape: kind / metadata / spec.
+type serviceTemplateYAML struct {
+	Kind     string                  `yaml:"kind"`
+	Metadata Metadata                `yaml:"metadata"`
+	Spec     serviceTemplateSpecYAML `yaml:"spec"`
+}
+
+type serviceTemplateSpecYAML struct {
+	Image         string            `yaml:"image,omitempty"`
+	Command       ShellCommand      `yaml:"command,omitempty"`
+	WorkingDir    string            `yaml:"workingDir,omitempty"`
+	Environment   map[string]string `yaml:"environment,omitempty"`
+	HealthCheck   *HealthCheck      `yaml:"healthcheck,omitempty"`
+	Artifacts     []ServiceArtifact `yaml:"artifacts,omitempty"`
+	ContainerName string            `yaml:"containerName,omitempty"`
+	Weight        int               `yaml:"weight,omitempty"`
+	Hooks         []Hook            `yaml:"hooks,omitempty"`
+}
+
+// UnmarshalYAML reads the kind/metadata/spec shape and flattens it.
+func (t *ServiceTemplate) UnmarshalYAML(node *yaml.Node) error {
+	var raw serviceTemplateYAML
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	t.Kind = raw.Kind
+	t.Name = raw.Metadata.Name
+	t.Description = raw.Metadata.Description
+	t.Tags = raw.Metadata.Tags
+	t.Image = raw.Spec.Image
+	t.Command = raw.Spec.Command
+	t.WorkingDir = raw.Spec.WorkingDir
+	t.Environment = raw.Spec.Environment
+	t.HealthCheck = raw.Spec.HealthCheck
+	t.Artifacts = raw.Spec.Artifacts
+	t.ContainerName = raw.Spec.ContainerName
+	t.Weight = raw.Spec.Weight
+	t.Hooks = raw.Spec.Hooks
+	return nil
 }
 
 // ServiceTemplateCollection holds all discovered service templates.
@@ -458,7 +508,7 @@ func NewServiceTemplateCollection() *ServiceTemplateCollection {
 	}
 }
 
-// AddTemplate adds a template to the collection.
+// AddTemplate adds a template to the collection, keyed by metadata.name.
 func (c *ServiceTemplateCollection) AddTemplate(template *ServiceTemplate) {
 	c.Templates[template.Name] = template
 }
@@ -473,13 +523,12 @@ func (c *ServiceTemplateCollection) HasTemplates() bool {
 	return len(c.Templates) > 0
 }
 
-// ResolveService resolves a service reference to a full service definition.
-// If the service has a Ref, it merges the template with any overrides.
-// Returns error if the referenced template doesn't exist.
+// ResolveService resolves a service reference to a full service definition by
+// merging the referenced kind: Service template with the test-level overrides.
+// Returns error if the referenced template doesn't exist or Ref is empty.
 func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error) {
 	if svc.Ref == "" {
-		// No reference, return as-is
-		return svc, nil
+		return svc, fmt.Errorf("service entry is missing required 'ref' field")
 	}
 
 	template := c.GetTemplate(svc.Ref)
@@ -487,17 +536,17 @@ func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error)
 		return svc, fmt.Errorf("service template '%s' not found", svc.Ref)
 	}
 
-	// Start with template values
 	resolved := Service{
-		Ref:         svc.Ref, // Preserve ref for service slot tracking
-		Name:        svc.Ref, // Default name to ref name
-		Image:       template.Image,
-		Command:     append(ShellCommand{}, template.Command...),
-		WorkingDir:  template.WorkingDir,
-		HealthCheck: template.HealthCheck,
-		Artifacts:   append([]ServiceArtifact{}, template.Artifacts...),
-		Weight:      template.Weight,
-		Hooks:       append([]Hook{}, template.Hooks...),
+		Ref:           svc.Ref,
+		Name:          svc.Ref, // Default hostname to ref
+		ContainerName: template.ContainerName,
+		Image:         template.Image,
+		Command:       append(ShellCommand{}, template.Command...),
+		WorkingDir:    template.WorkingDir,
+		HealthCheck:   template.HealthCheck,
+		Artifacts:     append([]ServiceArtifact{}, template.Artifacts...),
+		Weight:        template.Weight,
+		Hooks:         append([]Hook{}, template.Hooks...),
 	}
 
 	// Copy environment from template
@@ -508,27 +557,12 @@ func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error)
 		}
 	}
 
-	// Apply overrides from the service definition
+	// Apply overrides from the test-level service entry
 	if svc.Name != "" {
 		resolved.Name = svc.Name
 	}
 	if svc.ContainerName != "" {
 		resolved.ContainerName = svc.ContainerName
-	}
-	if svc.Image != "" {
-		resolved.Image = svc.Image
-	}
-	if len(svc.Command) > 0 {
-		resolved.Command = svc.Command
-	}
-	if svc.WorkingDir != "" {
-		resolved.WorkingDir = svc.WorkingDir
-	}
-	if svc.HealthCheck != nil {
-		resolved.HealthCheck = svc.HealthCheck
-	}
-	if svc.Weight > 0 {
-		resolved.Weight = svc.Weight
 	}
 
 	// Merge environment (override wins)
@@ -541,7 +575,7 @@ func (c *ServiceTemplateCollection) ResolveService(svc Service) (Service, error)
 		}
 	}
 
-	// Append service-level artifacts after template artifacts
+	// Append test-level artifacts after template artifacts
 	if len(svc.Artifacts) > 0 {
 		resolved.Artifacts = append(resolved.Artifacts, svc.Artifacts...)
 	}
@@ -628,17 +662,85 @@ type SetupInstruction struct {
 	CLI *CLICommand `yaml:"cli,omitempty" json:"cli,omitempty"`
 }
 
-// Test represents a single test case loaded from a chiperka.yaml file.
+// Suite is a runtime grouping of tests used by reports and aggregations.
+//
+// One file = one Test, so each Suite produced by the parser contains exactly
+// one Test. The grouping abstraction is kept so downstream reporting can
+// aggregate related tests (by file, folder, or endpoint) without coupling to
+// the YAML layer — there is no `kind: Suite` on disk.
+type Suite struct {
+	Name     string `json:"name"`
+	Tests    []Test `json:"tests"`
+	FilePath string `json:"file_path,omitempty"`
+}
+
+// Test is a kind: Test object loaded from a .chiperka file. One file = one test.
+//
+// On the YAML surface the file uses the Kubernetes-style shape:
+//
+//   kind: Test
+//   metadata:
+//     name: Login - valid credentials return 200
+//   spec:
+//     endpoint: user-login
+//     services: [...]
+//     execution: {...}
+//     assertions: [...]
+//
+// Internally the struct stores the spec fields flat for convenience. The
+// custom UnmarshalYAML reads the nested YAML and populates the flat fields.
 type Test struct {
-	Name        string             `yaml:"name" json:"name"`
-	Description string             `yaml:"description,omitempty" json:"description,omitempty"`
-	Tags        []string           `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Skipped     bool               `yaml:"skipped,omitempty" json:"skipped,omitempty"`
-	Services    []Service          `yaml:"services,omitempty" json:"services,omitempty"`
-	Setup       []SetupInstruction `yaml:"setup,omitempty" json:"setup,omitempty"`
-	Execution   Execution          `yaml:"execution" json:"execution"`
-	Assertions  []Assertion        `yaml:"assertions" json:"assertions"`
-	Teardown    []SetupInstruction `yaml:"teardown,omitempty" json:"teardown,omitempty"`
+	Kind        string             `yaml:"-" json:"kind"`
+	Name        string             `yaml:"-" json:"name"`
+	Description string             `yaml:"-" json:"description,omitempty"`
+	Tags        []string           `yaml:"-" json:"tags,omitempty"`
+	// Endpoint is the metadata.name of the kind: Endpoint this test verifies. Required.
+	Endpoint    string             `yaml:"-" json:"endpoint"`
+	Skipped     bool               `yaml:"-" json:"skipped,omitempty"`
+	Services    []Service          `yaml:"-" json:"services,omitempty"`
+	Setup       []SetupInstruction `yaml:"-" json:"setup,omitempty"`
+	Execution   Execution          `yaml:"-" json:"execution"`
+	Assertions  []Assertion        `yaml:"-" json:"assertions"`
+	Teardown    []SetupInstruction `yaml:"-" json:"teardown,omitempty"`
+	// FilePath stores the source file path (not from YAML, set by parser).
+	FilePath    string             `yaml:"-" json:"file_path,omitempty"`
+}
+
+// testYAML mirrors the on-disk YAML shape: kind / metadata / spec.
+type testYAML struct {
+	Kind     string       `yaml:"kind"`
+	Metadata Metadata     `yaml:"metadata"`
+	Spec     testSpecYAML `yaml:"spec"`
+}
+
+type testSpecYAML struct {
+	Endpoint   string             `yaml:"endpoint"`
+	Skipped    bool               `yaml:"skipped,omitempty"`
+	Services   []Service          `yaml:"services,omitempty"`
+	Setup      []SetupInstruction `yaml:"setup,omitempty"`
+	Execution  Execution          `yaml:"execution"`
+	Assertions []Assertion        `yaml:"assertions"`
+	Teardown   []SetupInstruction `yaml:"teardown,omitempty"`
+}
+
+// UnmarshalYAML reads the kind/metadata/spec shape and flattens it.
+func (t *Test) UnmarshalYAML(node *yaml.Node) error {
+	var raw testYAML
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	t.Kind = raw.Kind
+	t.Name = raw.Metadata.Name
+	t.Description = raw.Metadata.Description
+	t.Tags = raw.Metadata.Tags
+	t.Endpoint = raw.Spec.Endpoint
+	t.Skipped = raw.Spec.Skipped
+	t.Services = raw.Spec.Services
+	t.Setup = raw.Spec.Setup
+	t.Execution = raw.Spec.Execution
+	t.Assertions = raw.Spec.Assertions
+	t.Teardown = raw.Spec.Teardown
+	return nil
 }
 
 // Weight returns the total weight of all services in this test.
@@ -658,7 +760,7 @@ func (t Test) Weight() int {
 	return w
 }
 
-// ContainerCount returns the number of Docker containers this test will run.
+// ContainerCount returns the number of containers this test will run.
 func (t Test) ContainerCount() int {
 	if len(t.Services) == 0 {
 		return 1
@@ -687,21 +789,9 @@ func (t *Test) CollectHooks(slot string) []Hook {
 	return hooks
 }
 
-// Suite represents a collection of tests from a single .chiperka file.
-//
-// A .chiperka file with no top-level `kind:` field, or with `kind: test`, is
-// parsed as a Suite. Other kinds (notably `kind: service`) are dispatched to
-// other types by the parser.
-type Suite struct {
-	// Kind discriminator. Optional. Empty or "test" means this file is a test suite.
-	Kind  string `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Name  string `yaml:"name" json:"name"`
-	Tests []Test `yaml:"tests" json:"tests"`
-	// FilePath stores the source file path (not from YAML, set by parser).
-	FilePath string `yaml:"-" json:"file_path,omitempty"`
-}
-
-// TestCollection holds all discovered test suites.
+// TestCollection holds all discovered tests, grouped into Suites by source
+// file. With one file = one Test, each Suite contains exactly one Test —
+// the grouping abstraction is preserved for downstream reporting.
 type TestCollection struct {
 	Suites []Suite
 }
@@ -718,6 +808,15 @@ func (c *TestCollection) AddSuite(suite Suite) {
 	c.Suites = append(c.Suites, suite)
 }
 
+// AddTest wraps the test in a single-item Suite and appends it.
+func (c *TestCollection) AddTest(test Test) {
+	c.Suites = append(c.Suites, Suite{
+		Name:     test.Name,
+		Tests:    []Test{test},
+		FilePath: test.FilePath,
+	})
+}
+
 // TotalTests returns the total number of tests across all suites.
 func (c *TestCollection) TotalTests() int {
 	total := 0
@@ -728,7 +827,7 @@ func (c *TestCollection) TotalTests() int {
 }
 
 // FilterByTags returns a new TestCollection containing only tests that match any of the given tags.
-// If tags is empty, returns a copy of the original collection (no filtering).
+// If tags is empty, returns the original collection (no filtering).
 func (c *TestCollection) FilterByTags(tags []string) *TestCollection {
 	if len(tags) == 0 {
 		return c
@@ -748,12 +847,11 @@ func (c *TestCollection) FilterByTags(tags []string) *TestCollection {
 			}
 		}
 		if len(matchingTests) > 0 {
-			filteredSuite := Suite{
+			filtered.AddSuite(Suite{
 				Name:     suite.Name,
 				Tests:    matchingTests,
 				FilePath: suite.FilePath,
-			}
-			filtered.AddSuite(filteredSuite)
+			})
 		}
 	}
 	return filtered
@@ -786,12 +884,11 @@ func (c *TestCollection) FilterByName(pattern string) *TestCollection {
 			}
 		}
 		if len(matchingTests) > 0 {
-			filteredSuite := Suite{
+			filtered.AddSuite(Suite{
 				Name:     suite.Name,
 				Tests:    matchingTests,
 				FilePath: suite.FilePath,
-			}
-			filtered.AddSuite(filteredSuite)
+			})
 		}
 	}
 	return filtered
@@ -859,26 +956,95 @@ func matchesPattern(name, pattern string) bool {
 	return true
 }
 
-// EndpointInput describes a single input parameter for an endpoint.
-type EndpointInput struct {
-	Name     string `yaml:"name" json:"name"`
-	Type     string `yaml:"type,omitempty" json:"type,omitempty"`
-	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
+// Endpoint is a kind: Endpoint object loaded from a .chiperka file. It declares
+// one capability (HTTP request or CLI command) exposed by a Service.
+//
+// On the YAML surface the file uses the Kubernetes-style shape (kind / metadata
+// / spec). Internally fields are stored flat for convenience.
+type Endpoint struct {
+	Kind        string           `yaml:"-" json:"kind"`
+	Name        string           `yaml:"-" json:"name"`
+	Description string           `yaml:"-" json:"description,omitempty"`
+	Tags        []string         `yaml:"-" json:"tags,omitempty"`
+	// Service is the metadata.name of the kind: Service this endpoint belongs to.
+	Service     string           `yaml:"-" json:"service"`
+	// HTTP is set when this endpoint exposes an HTTP capability.
+	HTTP        *EndpointHTTP    `yaml:"-" json:"endpoint,omitempty"`
+	// Command is set when this endpoint exposes a CLI capability.
+	Command     *EndpointCommand `yaml:"-" json:"command,omitempty"`
+	FilePath    string           `yaml:"-" json:"file_path,omitempty"`
 }
 
-// Endpoint declares a callable entry point on a service.
-//
-// An endpoint is loaded from a .chiperka file with `kind: endpoint`. It
-// describes what can be called (service + method + URL) and what inputs it
-// accepts, but does not carry concrete values — those belong in tests.
-type Endpoint struct {
-	Kind     string          `yaml:"kind" json:"kind"`
-	Name     string          `yaml:"name" json:"name"`
-	Service  string          `yaml:"service" json:"service"`
-	Method   string          `yaml:"method" json:"method"`
-	URL      string          `yaml:"url" json:"url"`
-	Inputs   []EndpointInput `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	FilePath string          `yaml:"-" json:"file_path,omitempty"`
+// EndpointHTTP describes an HTTP capability.
+type EndpointHTTP struct {
+	Method   string                `yaml:"method" json:"method"`
+	URL      string                `yaml:"url" json:"url"`
+	Headers  map[string]string     `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body     string                `yaml:"body,omitempty" json:"body,omitempty"`
+	Response *EndpointHTTPResponse `yaml:"response,omitempty" json:"response,omitempty"`
+}
+
+// EndpointHTTPResponse documents the expected response shape (not asserted).
+type EndpointHTTPResponse struct {
+	StatusCode int               `yaml:"statusCode,omitempty" json:"status_code,omitempty"`
+	Headers    map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body       *EndpointHTTPBody `yaml:"body,omitempty" json:"body,omitempty"`
+}
+
+// EndpointHTTPBody documents the expected response body.
+type EndpointHTTPBody struct {
+	JsonPath []EndpointJsonPathDoc `yaml:"jsonPath,omitempty" json:"json_path,omitempty"`
+}
+
+// EndpointJsonPathDoc is a documented JSONPath in a response body.
+type EndpointJsonPathDoc struct {
+	Path        string `yaml:"path" json:"path"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+}
+
+// EndpointCommand describes a CLI capability. The container is taken from the
+// endpoint's Service field (which references a kind: Service).
+type EndpointCommand struct {
+	Cmd         string           `yaml:"cmd" json:"cmd"`
+	Description string           `yaml:"description,omitempty" json:"description,omitempty"`
+	Args        []EndpointCmdArg `yaml:"args,omitempty" json:"args,omitempty"`
+}
+
+// EndpointCmdArg is a documented argument for a CLI endpoint.
+type EndpointCmdArg struct {
+	Name        string   `yaml:"name" json:"name"`
+	Values      []string `yaml:"values,omitempty" json:"values,omitempty"`
+	Default     string   `yaml:"default,omitempty" json:"default,omitempty"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+}
+
+// endpointYAML mirrors the on-disk YAML shape: kind / metadata / spec.
+type endpointYAML struct {
+	Kind     string           `yaml:"kind"`
+	Metadata Metadata         `yaml:"metadata"`
+	Spec     endpointSpecYAML `yaml:"spec"`
+}
+
+type endpointSpecYAML struct {
+	Service  string           `yaml:"service"`
+	Endpoint *EndpointHTTP    `yaml:"endpoint,omitempty"`
+	Command  *EndpointCommand `yaml:"command,omitempty"`
+}
+
+// UnmarshalYAML reads the kind/metadata/spec shape and flattens it.
+func (e *Endpoint) UnmarshalYAML(node *yaml.Node) error {
+	var raw endpointYAML
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	e.Kind = raw.Kind
+	e.Name = raw.Metadata.Name
+	e.Description = raw.Metadata.Description
+	e.Tags = raw.Metadata.Tags
+	e.Service = raw.Spec.Service
+	e.HTTP = raw.Spec.Endpoint
+	e.Command = raw.Spec.Command
+	return nil
 }
 
 // EndpointCollection holds all discovered endpoints.
@@ -893,7 +1059,7 @@ func NewEndpointCollection() *EndpointCollection {
 	}
 }
 
-// AddEndpoint adds an endpoint to the collection.
+// AddEndpoint adds an endpoint to the collection, keyed by metadata.name.
 func (c *EndpointCollection) AddEndpoint(ep *Endpoint) {
 	c.Endpoints[ep.Name] = ep
 }

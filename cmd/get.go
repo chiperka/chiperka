@@ -161,21 +161,25 @@ func runGetEndpoint(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Name: %s\n", ep.Name)
 	fmt.Printf("Service: %s\n", ep.Service)
-	fmt.Printf("Method: %s\n", ep.Method)
-	fmt.Printf("URL: %s\n", ep.URL)
+	if ep.HTTP != nil {
+		fmt.Printf("Method: %s\n", ep.HTTP.Method)
+		fmt.Printf("URL: %s\n", ep.HTTP.URL)
+	}
+	if ep.Command != nil {
+		fmt.Printf("Command: %s\n", ep.Command.Cmd)
+	}
 	fmt.Printf("File: %s\n", ep.FilePath)
-	if len(ep.Inputs) > 0 {
-		fmt.Println("\nInputs:")
-		for _, input := range ep.Inputs {
-			req := ""
-			if input.Required {
-				req = " (required)"
+	if ep.Command != nil && len(ep.Command.Args) > 0 {
+		fmt.Println("\nArguments:")
+		for _, arg := range ep.Command.Args {
+			fmt.Printf("  - %s", arg.Name)
+			if arg.Default != "" {
+				fmt.Printf(" (default: %s)", arg.Default)
 			}
-			typ := input.Type
-			if typ == "" {
-				typ = "string"
+			if arg.Description != "" {
+				fmt.Printf(" — %s", arg.Description)
 			}
-			fmt.Printf("  - %s: %s%s\n", input.Name, typ, req)
+			fmt.Println()
 		}
 	}
 	return nil

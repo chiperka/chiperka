@@ -1,2 +1,3 @@
-kind: service
-image: redis:7
+kind: Service
+spec:
+  image: redis:7

@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -562,15 +563,17 @@ func TestModel_ServiceTemplateCollection_HasTemplates(t *testing.T) {
 	}
 }
 
-func TestModel_ServiceTemplateCollection_ResolveService_NoRef(t *testing.T) {
+func TestModel_ServiceTemplateCollection_ResolveService_RejectsMissingRef(t *testing.T) {
+	// Inline service definitions are no longer supported — every service
+	// reference must point at a kind: Service via Ref.
 	c := NewServiceTemplateCollection()
-	svc := Service{Name: "app", Image: "myapp:latest"}
-	resolved, err := c.ResolveService(svc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	svc := Service{Name: "app"}
+	_, err := c.ResolveService(svc)
+	if err == nil {
+		t.Fatalf("expected error when Ref is empty")
 	}
-	if resolved.Image != "myapp:latest" {
-		t.Errorf("expected myapp:latest, got %q", resolved.Image)
+	if !strings.Contains(err.Error(), "ref") {
+		t.Errorf("expected error to mention 'ref', got: %v", err)
 	}
 }
 
@@ -616,9 +619,8 @@ func TestModel_ServiceTemplateCollection_ResolveService_WithOverrides(t *testing
 	})
 
 	svc := Service{
-		Ref:   "db",
-		Name:  "custom-db",
-		Image: "postgres:16",
+		Ref:  "db",
+		Name: "custom-db",
 		Environment: map[string]string{
 			"POSTGRES_DB": "overridden",
 		},
@@ -630,8 +632,9 @@ func TestModel_ServiceTemplateCollection_ResolveService_WithOverrides(t *testing
 	if resolved.Name != "custom-db" {
 		t.Errorf("expected custom-db, got %q", resolved.Name)
 	}
-	if resolved.Image != "postgres:16" {
-		t.Errorf("expected postgres:16, got %q", resolved.Image)
+	// Image is not overridable per-test — it always comes from the template.
+	if resolved.Image != "postgres:15" {
+		t.Errorf("expected postgres:15 from template, got %q", resolved.Image)
 	}
 	if resolved.Environment["POSTGRES_DB"] != "overridden" {
 		t.Errorf("expected overridden, got %q", resolved.Environment["POSTGRES_DB"])

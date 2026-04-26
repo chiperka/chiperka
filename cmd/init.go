@@ -15,13 +15,15 @@ import (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a new Chiperka project",
-	Long: `Init scaffolds a starter Chiperka project in the current directory.
+	Long: `Init scaffolds a starter Chiperka project in the current directory using
+the recommended layout from the spec documentation:
 
-It creates:
-  - .chiperka/chiperka.yaml  Configuration with discovery paths
-  - services/api.chiperka    Example service template
-  - tests/health.chiperka    Health check test (1 test case)
-  - tests/api.chiperka       API tests (2 test cases)
+  .chiperka/
+    chiperka.yaml                                    Discovery config
+    spec/
+      services/api.chiperka                          kind: Service
+      endpoints/api/api-root.chiperka                kind: Endpoint
+      tests/api/api-root/responds-with-200.chiperka  kind: Test
 
 If .chiperka/chiperka.yaml already exists, init exits without modifying anything.
 
@@ -39,64 +41,86 @@ func init() {
 }
 
 const chiperkaYAMLContent = `discovery:
-  - ./tests
-  - ./services
+  - ./.chiperka/spec
 `
 
-const apiServiceContent = `kind: service
-name: api
-image: nginx:alpine
-healthcheck:
-  test: "wget -q --spider http://localhost:80/"
-  retries: 30
+const apiServiceContent = `kind: Service
+metadata:
+  name: api
+  description: "Example API service"
+spec:
+  image: nginx:alpine
+  healthcheck:
+    test: "wget -q --spider http://localhost:80/"
+    retries: 30
 `
 
-const healthChiperkaContent = `name: Health checks
-
-tests:
-  - name: API is reachable
-    services:
-      - name: api
-        ref: api
-    execution:
-      target: http://api
-      request:
-        method: GET
-        url: /
-    assertions:
-      - response:
-          statusCode: 200
+const apiRootEndpointContent = `kind: Endpoint
+metadata:
+  name: api-root
+  description: "Default homepage"
+  tags: [public]
+spec:
+  service: api
+  endpoint:
+    method: GET
+    url: /
+    response:
+      statusCode: 200
 `
 
-const apiChiperkaContent = `name: API tests
-
-tests:
-  - name: Homepage returns content
-    services:
-      - name: api
-        ref: api
-    execution:
-      target: http://api
-      request:
-        method: GET
-        url: /
-    assertions:
-      - response:
-          statusCode: 200
-
-  - name: Returns 404 for missing page
-    services:
-      - name: api
-        ref: api
-    execution:
-      target: http://api
-      request:
-        method: GET
-        url: /missing-page
-    assertions:
-      - response:
-          statusCode: 404
+const apiRootTestRespondsContent = `kind: Test
+metadata:
+  name: responds-with-200
+  description: "GET / returns 200"
+  tags: [smoke]
+spec:
+  endpoint: api-root
+  services:
+    - ref: api
+  execution:
+    target: http://api
+    request:
+      method: GET
+      url: /
+  assertions:
+    - response:
+        statusCode: 200
 `
+
+const apiRootTestNotFoundContent = `kind: Test
+metadata:
+  name: missing-page-returns-404
+  description: "Unknown URLs return 404"
+  tags: [smoke]
+spec:
+  endpoint: api-root
+  services:
+    - ref: api
+  execution:
+    target: http://api
+    request:
+      method: GET
+      url: /missing-page
+  assertions:
+    - response:
+        statusCode: 404
+`
+
+// scaffoldFile is one file the init command creates, with its full path under
+// the project root and the content to write.
+type scaffoldFile struct {
+	path    string
+	content string
+}
+
+var scaffoldFiles = []scaffoldFile{
+	{".chiperka/chiperka.yaml", chiperkaYAMLContent},
+	{".chiperka/spec/services/api.chiperka", apiServiceContent},
+	{".chiperka/spec/endpoints/api/api-root.chiperka", apiRootEndpointContent},
+	{".chiperka/spec/tests/api/api-root/responds-with-200.chiperka", apiRootTestRespondsContent},
+	{".chiperka/spec/tests/api/api-root/missing-page-returns-404.chiperka", apiRootTestNotFoundContent},
+}
 
 func runInit(cmd *cobra.Command, args []string) error {
 	telemetry.ShowNoticeIfNeeded(false)
@@ -114,35 +138,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Create directories
-	if err := os.MkdirAll(".chiperka", 0755); err != nil {
-		return fmt.Errorf("failed to create .chiperka directory: %w", err)
-	}
-	if err := os.MkdirAll("tests", 0755); err != nil {
-		return fmt.Errorf("failed to create tests directory: %w", err)
-	}
-	if err := os.MkdirAll("services", 0755); err != nil {
-		return fmt.Errorf("failed to create services directory: %w", err)
-	}
-
-	// Write .chiperka/chiperka.yaml
-	if err := os.WriteFile(configPath, []byte(chiperkaYAMLContent), 0644); err != nil {
-		return fmt.Errorf("failed to write .chiperka/chiperka.yaml: %w", err)
-	}
-
-	// Write tests/health.chiperka
-	if err := os.WriteFile(filepath.Join("tests", "health.chiperka"), []byte(healthChiperkaContent), 0644); err != nil {
-		return fmt.Errorf("failed to write tests/health.chiperka: %w", err)
-	}
-
-	// Write tests/api.chiperka
-	if err := os.WriteFile(filepath.Join("tests", "api.chiperka"), []byte(apiChiperkaContent), 0644); err != nil {
-		return fmt.Errorf("failed to write tests/api.chiperka: %w", err)
-	}
-
-	// Write services/api.chiperka (service template)
-	if err := os.WriteFile(filepath.Join("services", "api.chiperka"), []byte(apiServiceContent), 0644); err != nil {
-		return fmt.Errorf("failed to write services/api.chiperka: %w", err)
+	// Create files (with directories on the fly)
+	for _, f := range scaffoldFiles {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0755); err != nil {
+			return fmt.Errorf("failed to create %s: %w", filepath.Dir(f.path), err)
+		}
+		if err := os.WriteFile(f.path, []byte(f.content), 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", f.path, err)
+		}
 	}
 
 	// Add .chiperka/results/ to .gitignore if it exists
@@ -161,10 +164,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("Created .chiperka/chiperka.yaml")
-	fmt.Println("Created services/api.chiperka")
-	fmt.Println("Created tests/health.chiperka")
-	fmt.Println("Created tests/api.chiperka")
+	for _, f := range scaffoldFiles {
+		fmt.Printf("Created %s\n", f.path)
+	}
 	fmt.Println()
 	fmt.Println("Run your tests with: chiperka test")
 

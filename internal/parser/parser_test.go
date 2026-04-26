@@ -20,14 +20,17 @@ func TestParser_ParseFile_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if suite.Name != "simple-suite" {
-		t.Errorf("expected name 'simple-suite', got %q", suite.Name)
+	if suite.Name != "health-check" {
+		t.Errorf("expected name 'health-check', got %q", suite.Name)
 	}
 	if len(suite.Tests) != 1 {
 		t.Fatalf("expected 1 test, got %d", len(suite.Tests))
 	}
 	if suite.Tests[0].Name != "health-check" {
 		t.Errorf("expected test name 'health-check', got %q", suite.Tests[0].Name)
+	}
+	if suite.Tests[0].Endpoint != "api-health" {
+		t.Errorf("expected endpoint reference 'api-health', got %q", suite.Tests[0].Endpoint)
 	}
 	if suite.Tests[0].Execution.Request.Method != "GET" {
 		t.Errorf("expected method GET, got %q", suite.Tests[0].Execution.Request.Method)
@@ -40,18 +43,21 @@ func TestParser_ParseFile_Full(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if suite.Name != "full-suite" {
-		t.Errorf("expected name 'full-suite', got %q", suite.Name)
+	if suite.Name != "login-test" {
+		t.Errorf("expected name 'login-test', got %q", suite.Name)
 	}
 	test := suite.Tests[0]
 	if len(test.Tags) != 2 {
 		t.Errorf("expected 2 tags, got %d", len(test.Tags))
 	}
+	if test.Endpoint != "user-login" {
+		t.Errorf("expected endpoint 'user-login', got %q", test.Endpoint)
+	}
 	if len(test.Services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(test.Services))
 	}
-	if test.Services[0].Image != "myapp:latest" {
-		t.Errorf("expected image myapp:latest, got %q", test.Services[0].Image)
+	if test.Services[0].Ref != "api" {
+		t.Errorf("expected service ref 'api', got %q", test.Services[0].Ref)
 	}
 	if len(test.Setup) != 1 {
 		t.Errorf("expected 1 setup step, got %d", len(test.Setup))
@@ -96,7 +102,17 @@ func TestParser_ParseFile_NonExistent(t *testing.T) {
 
 func TestParser_ParseBytes_Valid(t *testing.T) {
 	p := New()
-	yaml := []byte("name: inline\ntests:\n  - name: t1\n    execution:\n      request:\n        method: GET\n        url: /test\n    assertions: []")
+	yaml := []byte(`kind: Test
+metadata:
+  name: inline
+spec:
+  endpoint: t1
+  execution:
+    request:
+      method: GET
+      url: /test
+  assertions: []
+`)
 	suite, err := p.ParseBytes(yaml)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -123,14 +139,16 @@ func TestParser_ParseAll_MultipleFiles(t *testing.T) {
 	p := New()
 	files := []string{
 		testdataPath(t, "valid-simple.chiperka"),
+		testdataPath(t, "valid-multi-one.chiperka"),
 		testdataPath(t, "valid-multi.chiperka"),
+		testdataPath(t, "valid-multi-three.chiperka"),
 	}
 	result := p.ParseAll(files)
 	if len(result.Errors) != 0 {
 		t.Errorf("expected no errors, got %v", result.Errors)
 	}
-	if len(result.Tests.Suites) != 2 {
-		t.Fatalf("expected 2 suites, got %d", len(result.Tests.Suites))
+	if len(result.Tests.Suites) != 4 {
+		t.Fatalf("expected 4 suites, got %d", len(result.Tests.Suites))
 	}
 	if result.Tests.TotalTests() != 4 {
 		t.Errorf("expected 4 total tests, got %d", result.Tests.TotalTests())
@@ -214,7 +232,18 @@ func TestParser_EnvVarExpansion_Unset(t *testing.T) {
 func TestParser_EnvVarExpansion_NonChiperkaPrefix(t *testing.T) {
 	// $HOME should NOT be expanded (only $CHIPERKA_ prefix)
 	p := New()
-	yaml := []byte("name: test\ntests:\n  - name: t\n    execution:\n      target: $HOME/api\n      request:\n        method: GET\n        url: /test\n    assertions: []")
+	yaml := []byte(`kind: Test
+metadata:
+  name: t
+spec:
+  endpoint: ep
+  execution:
+    target: $HOME/api
+    request:
+      method: GET
+      url: /test
+  assertions: []
+`)
 	suite, err := p.ParseBytes(yaml)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -292,15 +321,25 @@ func TestParser_ParseAll_KindTestExplicit(t *testing.T) {
 	}
 }
 
-func TestParser_ParseAll_KindDefaultsToTest(t *testing.T) {
-	// valid-simple.chiperka has no `kind:` field — must still parse as test (default).
+func TestParser_ParseAll_RejectsMissingKind(t *testing.T) {
+	// Every .chiperka file must declare its kind explicitly. There is no default.
 	p := New()
-	result := p.ParseAll([]string{testdataPath(t, "valid-simple.chiperka")})
-	if len(result.Errors) != 0 {
-		t.Fatalf("unexpected errors: %v", result.Errors)
+	yaml := []byte(`metadata:
+  name: t
+spec:
+  endpoint: ep
+  execution:
+    request:
+      method: GET
+      url: /
+  assertions: []
+`)
+	_, err := p.ParseBytes(yaml)
+	if err == nil {
+		t.Fatalf("expected error for missing kind")
 	}
-	if result.Tests.TotalTests() != 1 {
-		t.Errorf("expected 1 test (default kind), got %d", result.Tests.TotalTests())
+	if !strings.Contains(err.Error(), "kind") {
+		t.Errorf("expected error to mention 'kind', got: %v", err)
 	}
 }
 
@@ -347,14 +386,14 @@ func TestParser_ParseFile_RejectsServiceKind(t *testing.T) {
 	p := New()
 	_, err := p.ParseFile(testdataPath(t, "service-valid.chiperka"))
 	if err == nil {
-		t.Fatalf("expected error: ParseFile should reject kind: service")
+		t.Fatalf("expected error: ParseFile should reject kind: Service")
 	}
 }
 
 func TestParser_ParseBytes_RejectsServiceKind(t *testing.T) {
 	p := New()
-	_, err := p.ParseBytes([]byte("kind: service\nname: api\nimage: nginx"))
+	_, err := p.ParseBytes([]byte("kind: Service\nmetadata:\n  name: api\nspec:\n  image: nginx"))
 	if err == nil {
-		t.Fatalf("expected error: ParseBytes should reject kind: service")
+		t.Fatalf("expected error: ParseBytes should reject kind: Service")
 	}
 }
